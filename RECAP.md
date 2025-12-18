@@ -4,149 +4,120 @@ Current session state and recent progress for Navi development.
 
 ---
 
-## Current Session: Session 4 — OpenRouter API Integration
+## Current Session: Session 5 — Type Safety and Testing
 
-**Status:** 🚧 In Progress — Planning phase
-**Date Started:** 2025-12-03
+**Status:** ✅ Complete
+**Date:** 2025-12-18
+**Commit:** (pending) — refactor: Add Role enum with Display trait and unit tests
 
-### What We're Building
+### What We Built
 
-Implementing an async HTTP client to connect Navi's REPL to OpenRouter's API, enabling multi-model AI conversations through a unified interface.
-
-### Approach Decided
-
-- **DIY API wrapper** using `reqwest` (learning exercise vs using `litellm-rs`)
-- **OpenRouter** as provider (OpenAI-compatible API, access to multiple models)
-- **Build from scratch** to learn: async/await, HTTP, JSON serialization, error handling
+Improved type safety and added comprehensive testing:
+- Replaced `String`-based role field with type-safe `Role` enum (User, Model, Directive)
+- Implemented `Display` trait for `ChatMessage` with custom formatting
+- Added serde rename attributes for API compatibility (serialize as "user", "assistant", "system")
+- Created comprehensive unit tests for both `parse_command` and `ChatMessage` display
+- Learned: enums with serde customization, trait implementation, testing patterns, macro syntax
 
 ---
 
 ## Files Changed This Session
 
-### Created
-- `/CLAUDE.md` — Added "Session Resumption & Context Management" section
-- `/TODO_LIST.md` — Project roadmap and feature backlog
-- `/RECAP.md` — This file
-
-### To Be Created
-- `Cargo.toml` — Dependencies need to be added (tokio, reqwest, serde, serde_json, dotenv)
-- `src/api/mod.rs` — API module declaration
-- `src/api/client.rs` — HTTP client and send_message() function
-- `src/api/types.rs` — Request/response structs with serde
-- `.env` — API key storage (add to .gitignore)
-- `.gitignore` — Exclude .env file
-
-### To Be Modified
-- `src/main.rs` — Make main() async, integrate API calls into REPL
+### Modified
+- `src/api/types.rs` — Added `Role` enum with serde attributes, implemented `Display` trait, added 3 unit tests
+- `src/main.rs` — Updated to use `Role` enum, added 3 unit tests for `parse_command`, fixed print formatting
+- `src/api/client.rs` — Updated doc comment to reference correct type names
 
 ---
 
 ## Build State
 
-**Compiles:** ✅ Yes (basic REPL from Session 3)
-**Tests:** ⚠️ No tests written yet
-**Errors:** None currently
+**Compiles:** ✅ Yes (no warnings)
+**Tests:** ✅ All 6 tests passing
+**End-to-end:** ⏳ Not yet tested with live API
 
 **What works:**
-- Command parsing (`/quit`, `/help`, unknown commands)
-- REPL loop with user input
-- Enum-based command handling with pattern matching
+- Command parsing with unit tests (`/quit`, `/help`)
+- Type-safe Role enum with API serialization
+- ChatMessage Display formatting
+- REPL loop with async main
+- API client code structure
+- Module organization
 
-**What's blocked:**
-- API integration (awaiting dependency setup and implementation)
+**What needs testing:**
+- Actual API call to OpenRouter (requires `.env` with API key)
+- Error handling for network failures
+- Multi-turn conversation flow
+
+---
+
+## Concepts Learned This Session
+
+### Rust Concepts Applied
+- **Enums with serde** (Ch 6 + serde docs) — `#[serde(rename = "...")]` for custom serialization
+- **Traits** (Ch 10.2) — Implementing `Display` trait for custom types
+- **Testing** (Ch 11) — `#[cfg(test)]` modules, `#[test]` attribute, `assert_eq!` macro
+- **Pattern matching** (Ch 6) — Matching on enum variants in Display implementation
+- **Macro syntax** — Understanding `print!("{}", x)` format string requirements
+- **Lifetimes** (Ch 10.3) — Brief encounter with `'_` anonymous lifetime
+
+### Key Learning Moments
+- **Serde customization** — Using attributes to separate domain model from wire format
+- **Display vs to_string** — How implementing Display gives you to_string() for free
+- **Test organization** — Keeping tests near the code they test with cfg(test)
+- **Macro vs function** — Why print!() needs a string literal as first argument
 
 ---
 
 ## Pending Decisions
 
-### ✅ Resolved
-- ✅ Use OpenRouter (not direct provider APIs)
-- ✅ Build custom wrapper with reqwest (not use litellm-rs)
-- ✅ Create resumption docs (TODO_LIST.md, RECAP.md)
-
 ### ⏳ To Decide
 - Error handling strategy: custom Error enum vs `anyhow` crate?
-- Message history storage: in-memory Vec vs persist to disk immediately?
-- Model selection: hardcode default vs config file vs runtime flag?
-
----
-
-## Concepts Encountered This Session
-
-### Rust Concepts (Not Yet Applied)
-- **Modules** (Ch 7) — Will organize code into `src/api/` structure
-- **Async/await** (Ch 20) — Will use for non-blocking HTTP requests
-- **Traits** (Ch 10) — `Serialize`/`Deserialize` for JSON handling
-- **Error handling** (Ch 9) — Propagating HTTP and API errors
-
-### External Crates (To Be Added)
-- `tokio` — Async runtime for async/await
-- `reqwest` — HTTP client built on tokio
-- `serde` — Serialization framework
-- `serde_json` — JSON support for serde
-- `dotenv` — Load environment variables from .env
+- Message history storage: in-memory Vec vs persist to disk?
+- Model selection: hardcode vs config file vs runtime flag?
 
 ---
 
 ## Next Steps
 
-**Immediate tasks** (in order):
+**Decided Earlier This Session:**
+- Implement conversation history to enable multi-turn conversations
+- Use `Vec<ChatMessage>` to store full conversation
+- Modify `chat_completion()` to accept entire history instead of single message
 
-1. **Add dependencies** to `Cargo.toml`
-   - Run `cargo build` to download/compile crates
-   - Reading: Book Ch 7.4 on external packages
+**Immediate Next Session:**
+1. Implement conversation history management in `main.rs`
+2. Update `client::chat_completion()` to accept message history slice
+3. Test multi-turn conversations
 
-2. **Create module structure**
-   - Make `src/api/` directory
-   - Create `mod.rs`, `client.rs`, `types.rs`
-   - Reading: Book Ch 7 on modules
-
-3. **Define types** in `types.rs`
-   - `ChatMessage` struct (role, content)
-   - `ChatRequest` struct (model, messages)
-   - `ChatResponse` struct (parse API response)
-   - Add `#[derive(Serialize, Deserialize)]`
-   - Reading: Book Ch 5 on structs, Ch 10 on traits
-
-4. **Implement client** in `client.rs`
-   - Write `async fn send_message(prompt: &str) -> Result<String, Error>`
-   - Build HTTP POST with Authorization header
-   - Serialize request, deserialize response
-   - Reading: Book Ch 9 on Result, Ch 20 on async (or learn by doing)
-
-5. **Integrate into REPL** in `main.rs`
-   - Add `#[tokio::main]` to make main() async
-   - Route non-command input to send_message()
-   - Display AI responses in loop
-
-6. **Test end-to-end**
-   - Set up `.env` with OPENROUTER_API_KEY
-   - Run `cargo run` and send a message
-   - Debug any errors
+**Future (see TODO_LIST.md):**
+- System prompts (Navi's personality)
+- Model selection command
+- Streaming responses
 
 ---
 
 ## Previous Sessions Summary
 
-### Session 3 — Command Parsing with Enums ✅ Complete
-- Implemented `Command` enum (Quit, Help, Unknown)
-- Added pattern matching with `match` for command handling
-- Extracted `prompt()` function for input handling
-- Learned: enums, pattern matching, deriving traits, const vs variables
-- **Files:** `src/main.rs`
+### Session 4 — OpenRouter API Integration ✅
+- Implemented async HTTP client with tokio + reqwest
+- Created API types with serde serialization
+- Integrated OpenRouter API into REPL
+- Learned: async/await, modules, HTTP, JSON, error handling
 
-### Session 2 — Basic REPL ✅ Complete
+### Session 3 — Command Parsing with Enums ✅
+- Implemented `Command` enum, pattern matching
+- Learned: enums, derive traits, const vs variables
+
+### Session 2 — Basic REPL ✅
 - Implemented read-eval-print loop
-- Handled user input with stdin
 - Learned: I/O, loops, String vs &str
-- **Files:** `src/main.rs`
 
-### Session 1 — Project Scaffolding ✅ Complete
+### Session 1 — Project Scaffolding ✅
 - Set up Rust project with Cargo
 - Created learning documentation structure
-- **Files:** `Cargo.toml`, `docs/learning/` directory
 
 ---
 
-**Last Updated:** 2025-12-03
-**Next Session:** Continue with dependency setup and API implementation
+**Last Updated:** 2025-12-18
+**Next Session:** Implement conversation history for multi-turn conversations

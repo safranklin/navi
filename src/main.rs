@@ -2,11 +2,11 @@ use std::io;
 use std::io::Write;
 
 mod api;
-use api::{client, ChatMessage};
+use api::{client, ChatMessage, Role};
 
 const MOTD: &str = "Welcome to navi! Type /help for assistance or /quit to exit.";
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Debug)]
 enum Command {
     Quit,
     Help,
@@ -33,39 +33,6 @@ fn parse_command(input: &str) -> Command {
         "/quit" => Command::Quit,
         "/help" => Command::Help,
         _ => Command::Unknown,
-    }
-}
-
-/// Renders a chat message to the console.
-/// 
-/// # Arguments
-/// * `message` - A reference to the ChatMessage to render.
-/// * `add_newline` - A boolean indicating whether to add a newline after the message.
-/// 
-/// # Returns
-/// Nothing. This function prints the message directly to stdout.
-/// 
-/// # Example
-/// ```
-/// let message = ChatMessage {
-///     role: "navi".to_string(),
-///     content: "Hello, user!".to_string(),
-/// };
-/// render_message(&message, false);
-/// // Output:
-/// // navi> Hello, user!
-/// ```
-fn render_message(message: &ChatMessage, add_newline: bool) {
-    // Take a chat message, if the role is not user, for now we will assume it's from navi. This should be the case, for now.
-    let role_str = match message.role.as_str() {
-        "user" => "user",
-        _ => "navi",
-    };
-
-    let content = &message.content;
-    print!("{}> {}", role_str, content);
-    if add_newline {
-        println!();
     }
 }
 
@@ -102,11 +69,11 @@ async fn main() {
     loop {
 
         let mut user_message = ChatMessage {
-            role: "user".to_string(),
+            role: Role::User,
             content: String::from(""), // Placeholder, will be filled with user input
         };
 
-        render_message(&user_message, false);
+        print!("{}", user_message);
         user_message.content = capture_user_input();
 
         // Check for commands
@@ -124,11 +91,31 @@ async fn main() {
 
         match client::chat_completion(&user_message).await {
             Ok(response_message) => {
-                render_message(&response_message, true);
+                println!("{}", response_message);
             }
             Err(e) => {
                 eprintln!("Error: {}", e);
             }
         }        
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_command_quit() {
+        assert_eq!(parse_command("/quit"), Command::Quit);
+    }
+
+    #[test]
+    fn test_parse_command_help() {
+        assert_eq!(parse_command("/help"), Command::Help);
+    }
+
+    #[test]
+    fn test_parse_normal_input() {
+        assert_eq!(parse_command("Hello, how are you?"), Command::Unknown);
     }
 }

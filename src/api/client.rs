@@ -9,9 +9,9 @@ use std::env;
 /// # Example
 /// ```no_run
 /// use api::client;
-/// use api::types::ChatMessage;
+/// use api::types::{ChatMessage, Role};
 /// let user_message = ChatMessage {
-///    role: "user".to_string(),
+///    role: Role::User,
 ///    content: "Hello, how are you?".to_string(),
 /// };
 /// match client::chat_completion(&user_message).await {
