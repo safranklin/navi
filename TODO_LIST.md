@@ -4,11 +4,17 @@ High-level project roadmap and feature backlog for Navi.
 
 ## Current Focus
 
-### 🚧 Conversation History (Next Up)
-- [ ] Create `Vec<ChatMessage>` to store conversation in main.rs
-- [ ] Push user and assistant messages to history each turn
-- [ ] Modify `chat_completion()` to accept full message history
-- [ ] Test multi-turn conversations with context
+### ✅ Conversation History (Complete)
+- [x] Create `Context` struct with `Vec<ModelSegment>` to store conversation
+- [x] Push user and model segments to context each turn
+- [x] Modify `model_completion()` to accept full context
+- [x] Implement `Context::add()` with reference return
+- [x] Add unit tests for Context operations
+
+### 🚧 System Prompts (Next Up)
+- [ ] Add initial Directive segment to Context on startup
+- [ ] Define Navi's personality/behavior
+- [ ] Consider config file vs hardcoded
 
 ### ✅ OpenRouter API Integration (Complete)
 - [x] Set up async runtime (Tokio) and HTTP client (reqwest)
@@ -54,7 +60,11 @@ High-level project roadmap and feature backlog for Navi.
 
 - [ ] **Error Handling Strategy** — Define custom error types vs using anyhow
 - [ ] **Logging System** — Add structured logging (tracing/log crate)
-- [x] **Testing Infrastructure** — Unit tests added for core functions (parse_command, ChatMessage display)
+- [x] **Testing Infrastructure** — 10 unit tests covering:
+  - [x] parse_command (3 tests)
+  - [x] ModelSegment Display (3 tests)
+  - [x] Context operations (3 tests)
+  - [x] Serde serialization contract test (1 test)
   - [ ] Integration tests for API client
   - [ ] Mock API responses for testing
 - [x] **Module Organization** — Basic structure established (api module, types, client)
@@ -72,14 +82,14 @@ High-level project roadmap and feature backlog for Navi.
 Track alongside "The Rust Programming Language" book chapters:
 
 - [x] Ch 1-3: Variables, functions, control flow (Session 1-2)
-- [x] Ch 4: Ownership (String vs &str, borrowing - Session 4)
-- [x] Ch 5: Structs (API types - Session 4)
+- [x] Ch 4: Ownership, slices (String vs &str, &[T] vs &Vec<T> - Session 4, 5)
+- [x] Ch 5: Structs (API types, Context - Session 4, 5)
 - [x] Ch 6: Enums and pattern matching (Session 3, 5)
 - [x] Ch 7: Modules and code organization (Session 4)
-- [ ] Ch 8: Collections (Vec, HashMap for message history - next)
+- [x] Ch 8: Collections (Vec<ModelSegment> for conversation history - Session 5)
 - [ ] Ch 9: Error handling (custom error types)
-- [x] Ch 10: Traits (Display impl, serde - Session 5)
-- [x] Ch 11: Testing (unit tests - Session 5)
+- [x] Ch 10: Traits (Display impl, serde customization - Session 5)
+- [x] Ch 11: Testing (unit tests, contract tests - Session 5)
 - [ ] Ch 12: I/O project (building CLI)
 - [ ] Ch 13: Closures and iterators (message processing)
 - [ ] Ch 15: Smart pointers (managing message history)

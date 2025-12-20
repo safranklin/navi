@@ -1,4 +1,4 @@
 pub mod types;
 pub mod client;
 
-pub use types::{ChatMessage, Role}; // Re-export types for easier access
+pub use types::{ModelSegment, Source, Context}; // Re-export types for easier access

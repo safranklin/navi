@@ -4,68 +4,97 @@ Current session state and recent progress for Navi development.
 
 ---
 
-## Current Session: Session 5 — Type Safety and Testing
+## Current Session: Session 5 — Type Safety, Testing, and Conversation History
 
 **Status:** ✅ Complete
-**Date:** 2025-12-18
-**Commit:** (pending) — refactor: Add Role enum with Display trait and unit tests
+**Date:** 2025-12-19
+**Commit:** (pending)
 
 ### What We Built
 
-Improved type safety and added comprehensive testing:
-- Replaced `String`-based role field with type-safe `Role` enum (User, Model, Directive)
-- Implemented `Display` trait for `ChatMessage` with custom formatting
-- Added serde rename attributes for API compatibility (serialize as "user", "assistant", "system")
-- Created comprehensive unit tests for both `parse_command` and `ChatMessage` display
-- Learned: enums with serde customization, trait implementation, testing patterns, macro syntax
+Major refactoring and feature implementation:
+- Created custom domain terminology: `Source`, `ModelSegment`, `Context`
+- Implemented `Display` trait for terminal output formatting
+- Added serde field/variant renames to separate domain model from API wire format
+- Built conversation history with `Context` struct and `add()` method
+- Comprehensive unit tests (10 total) including serde contract test
+- Learned: serde customization, trait implementation, testing patterns, mutability, slices
 
 ---
 
 ## Files Changed This Session
 
 ### Modified
-- `src/api/types.rs` — Added `Role` enum with serde attributes, implemented `Display` trait, added 3 unit tests
-- `src/main.rs` — Updated to use `Role` enum, added 3 unit tests for `parse_command`, fixed print formatting
-- `src/api/client.rs` — Updated doc comment to reference correct type names
+- `src/api/types.rs` — Complete rewrite with new terminology:
+  - `Source` enum (User, Model, Directive) with serde renames
+  - `ModelSegment` struct with Display trait
+  - `Context` struct with `new()` and `add()` methods
+  - `ModelRequest`, `ModelResponse`, `Choice` types
+  - 7 unit tests including serde serialization test
+- `src/main.rs` — Conversation history integration:
+  - Creates `Context` at start
+  - Adds user and model segments to context each turn
+  - Uses `context.add()` return value for cleaner code
+  - 3 unit tests for parse_command
+- `src/api/client.rs` — Updated to new types:
+  - `model_completion()` now takes `&Context`
+  - Updated doc comments with correct examples
+- `src/api/mod.rs` — Updated re-exports for new type names
 
 ---
 
 ## Build State
 
 **Compiles:** ✅ Yes (no warnings)
-**Tests:** ✅ All 6 tests passing
+**Tests:** ✅ All 10 tests passing
 **End-to-end:** ⏳ Not yet tested with live API
 
 **What works:**
 - Command parsing with unit tests (`/quit`, `/help`)
-- Type-safe Role enum with API serialization
-- ChatMessage Display formatting
+- Type-safe Source enum with API serialization
+- ModelSegment Display formatting ("user> ", "navi> ", "system> ")
+- Context management (new, add with return reference)
+- Conversation history persists across turns
+- Serde serialization verified with contract test
 - REPL loop with async main
-- API client code structure
-- Module organization
 
 **What needs testing:**
 - Actual API call to OpenRouter (requires `.env` with API key)
-- Error handling for network failures
-- Multi-turn conversation flow
+- Multi-turn conversation with real model
 
 ---
 
 ## Concepts Learned This Session
 
 ### Rust Concepts Applied
-- **Enums with serde** (Ch 6 + serde docs) — `#[serde(rename = "...")]` for custom serialization
-- **Traits** (Ch 10.2) — Implementing `Display` trait for custom types
-- **Testing** (Ch 11) — `#[cfg(test)]` modules, `#[test]` attribute, `assert_eq!` macro
-- **Pattern matching** (Ch 6) — Matching on enum variants in Display implementation
-- **Macro syntax** — Understanding `print!("{}", x)` format string requirements
-- **Lifetimes** (Ch 10.3) — Brief encounter with `'_` anonymous lifetime
+- **Serde customization** — `#[serde(rename = "...")]` on fields and variants
+- **Trait implementation** (Ch 10.2) — Implementing `Display` for custom types
+- **Testing** (Ch 11) — `#[cfg(test)]`, `#[test]`, `assert_eq!`, contract tests
+- **Mutability** — `&mut self`, `let mut`, explicit mutability requirements
+- **Slices** (Ch 4.3) — `&[T]` vs `&Vec<T>` in function signatures
+- **API design** — Returning references from methods (`add()` returns `&ModelSegment`)
+- **Domain modeling** — Separating internal names from external wire format
 
 ### Key Learning Moments
-- **Serde customization** — Using attributes to separate domain model from wire format
-- **Display vs to_string** — How implementing Display gives you to_string() for free
-- **Test organization** — Keeping tests near the code they test with cfg(test)
-- **Macro vs function** — Why print!() needs a string literal as first argument
+- **Serde field renaming** — `source` in code becomes `"role"` in JSON
+- **Display gives you to_string()** — Implementing Display provides `to_string()` automatically
+- **Contract tests** — Testing serialization with expected JSON string validates API compatibility
+- **Mutability is explicit** — Can't call `&mut self` methods on immutable bindings
+- **Slice idiom** — Prefer `&[T]` over `&Vec<T>` for function parameters
+
+---
+
+## Domain Terminology
+
+Custom naming that makes the codebase "ours":
+
+| Our Term | API Wire Format | Meaning |
+|----------|-----------------|---------|
+| `Source::User` | `"user"` | Input from the human |
+| `Source::Model` | `"assistant"` | Output from the AI model |
+| `Source::Directive` | `"system"` | System prompt/instructions |
+| `ModelSegment` | `{"role": "...", "content": "..."}` | A single piece of the conversation |
+| `Context` | The messages array | Full conversation history |
 
 ---
 
@@ -73,27 +102,23 @@ Improved type safety and added comprehensive testing:
 
 ### ⏳ To Decide
 - Error handling strategy: custom Error enum vs `anyhow` crate?
-- Message history storage: in-memory Vec vs persist to disk?
 - Model selection: hardcode vs config file vs runtime flag?
+- System prompt: where to store Navi's personality?
 
 ---
 
 ## Next Steps
 
-**Decided Earlier This Session:**
-- Implement conversation history to enable multi-turn conversations
-- Use `Vec<ChatMessage>` to store full conversation
-- Modify `chat_completion()` to accept entire history instead of single message
-
-**Immediate Next Session:**
-1. Implement conversation history management in `main.rs`
-2. Update `client::chat_completion()` to accept message history slice
-3. Test multi-turn conversations
+**Immediate:**
+1. Run `cargo test` to verify all 10 tests pass
+2. Test with live API (create `.env` with `OPENROUTER_API_KEY`)
+3. Commit this session's work
 
 **Future (see TODO_LIST.md):**
 - System prompts (Navi's personality)
-- Model selection command
+- Model selection command (`/model`)
 - Streaming responses
+- Config file system
 
 ---
 
@@ -119,5 +144,5 @@ Improved type safety and added comprehensive testing:
 
 ---
 
-**Last Updated:** 2025-12-18
-**Next Session:** Implement conversation history for multi-turn conversations
+**Last Updated:** 2025-12-19
+**Next Session:** Test with live API, add system prompts

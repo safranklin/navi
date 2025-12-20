@@ -1,34 +1,36 @@
-use super::types::{ChatMessage, ChatRequest, ChatResponse};
+use super::types::{ModelSegment, ModelRequest, ModelResponse, Context};
 use std::env;
 
 /// Sends a chat completion request to the OpenRouter API using the provided user message.
 /// # Arguments
-/// * `user_message` - A reference to the ChatMessage containing the user's input
+/// * `context` - A reference to the Context containing the conversation history.
 /// # Returns
-/// A Result containing the ChatMessage response from the API or an error.
+/// A Result containing the ModelSegment response from the API or an error.
 /// # Example
 /// ```no_run
 /// use api::client;
-/// use api::types::{ChatMessage, Role};
-/// let user_message = ChatMessage {
-///    role: Role::User,
-///    content: "Hello, how are you?".to_string(),
+/// use api::types::{ModelSegment, Source};
+/// let mut context = Context::new();
+/// let user_message = ModelSegment {
+///    source: Source::User,
+///    content: String::from("Hello, how are you?"),
 /// };
-/// match client::chat_completion(&user_message).await {
-///     Ok(response_message) => {
-///         println!("Response: {:?}", response_message);
+/// 
+/// context.add(user_message);
+/// 
+/// match client::model_completion(&context).await {
+///     Ok(response) => {
+///         println!("Response: {:?}", response);
 ///     }
 ///     Err(e) => {
 ///         eprintln!("Error: {}", e);
 ///     }
 /// }
 /// ```
-pub async fn chat_completion(user_message: &ChatMessage) -> Result<ChatMessage, Box <dyn std::error::Error>> {
-    let req = ChatRequest {
+pub async fn model_completion(context: &Context) -> Result<ModelSegment, Box <dyn std::error::Error>> {
+    let req = ModelRequest {
         model: "nvidia/nemotron-nano-12b-v2-vl:free".to_string(),
-        messages: vec![
-            user_message.clone(),
-        ]
+        messages: context.items.to_vec(),
     };
 
     // Retrieve the API key from environment variables
@@ -42,9 +44,9 @@ pub async fn chat_completion(user_message: &ChatMessage) -> Result<ChatMessage, 
         .send()
         .await?;
 
-    let chat_response: ChatResponse = response.json().await?;
+    let res: ModelResponse = response.json().await?;
 
-    let message = chat_response.choices.first().ok_or("No valid response from API!")?.message.clone();
+    let message = res.choices.first().ok_or("No valid response from API!")?.message.clone();
     
     Ok(message)
 }

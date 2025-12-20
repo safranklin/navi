@@ -2,7 +2,9 @@ use std::io;
 use std::io::Write;
 
 mod api;
-use api::{client, ChatMessage, Role};
+use api::{client, ModelSegment, Source};
+
+use crate::api::Context;
 
 const MOTD: &str = "Welcome to navi! Type /help for assistance or /quit to exit.";
 
@@ -66,10 +68,12 @@ async fn main() {
     dotenv::dotenv().ok();  // Load .env file
     println!("{}\n", MOTD);
 
+    let mut context = Context::new();
+
     loop {
 
-        let mut user_message = ChatMessage {
-            role: Role::User,
+        let mut user_message = ModelSegment {
+            source: Source::User,
             content: String::from(""), // Placeholder, will be filled with user input
         };
 
@@ -89,14 +93,17 @@ async fn main() {
             _ => {}
         }
 
-        match client::chat_completion(&user_message).await {
-            Ok(response_message) => {
-                println!("{}", response_message);
+        context.add(user_message);
+
+        match client::model_completion(&context).await {
+            Ok(res) => {
+                let added = context.add(res);
+                println!("{}", added);
             }
             Err(e) => {
                 eprintln!("Error: {}", e);
             }
-        }        
+        }
     }
 }
 
