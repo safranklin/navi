@@ -1,7 +1,7 @@
 use std::fmt;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 pub enum Source {
     #[serde(rename = "user")]
     User,
@@ -44,7 +44,13 @@ pub struct Context {
 impl Context {
     /// Creates a new, empty Context.
     pub fn new() -> Self {
-        Context { items: Vec::new() }
+        let sys_directive = ModelSegment {
+            source: Source::Directive,
+            content: String::from("You are Navi, a small helpful fairy. Like a guide in a fairy tale, you help travelers on their journey. You are cheerful, speak briefly, and sometimes say \"Hey!\" to get attention. You give useful advice without long explanations."),
+        };
+        Context {
+            items: vec![sys_directive],
+        }
     }
     /// Adds a new ModelSegment to the context and returns a reference to the newly added segment.
     pub fn add(&mut self, segment: ModelSegment) -> &ModelSegment {
@@ -125,9 +131,11 @@ mod tests {
     }
 
     #[test]
-    fn test_context_init_empty() {
+    fn test_context_init_with_directive() {
         let context = Context::new();
-        assert!(context.items.is_empty());
+        assert!(!context.items.is_empty());
+        assert_eq!(context.items[0].source, Source::Directive);
+        assert!(context.items[0].content.starts_with("You are Navi"));
     }
 
     /// Tests adding ModelSegments to the Context.
@@ -141,14 +149,14 @@ mod tests {
         let added = ctx.add(segment);
         // When a ModelSegment is added, it a reference to it shouild be added and the length of items should increase.
         assert_eq!(added.content, "test");
-        assert_eq!(ctx.items.len(), 1);
-        let another_added = ctx.add(ModelSegment {
+        assert_eq!(ctx.items.len(), 2);
+        ctx.add(ModelSegment {
             source: Source::Model,
             content: "response".to_string(),
         });
         // Verify the second addition
-        assert_eq!(another_added.content, "response");
-        assert_eq!(ctx.items.len(), 2);
+        assert_eq!(ctx.items.len(), 3);
+        assert_eq!(ctx.items[2].content, "response");
     }
     
     /// This is a contract test to ensure that the ModelRequest serializes correctly to JSON.
