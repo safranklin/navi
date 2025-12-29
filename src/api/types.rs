@@ -23,12 +23,10 @@ impl ModelSegment {
     /// Replaces typographic characters with ASCII equivalents.
     pub fn normalized(&self) -> ModelSegment {
 
-        // Strip the curly quotes, em dashes, and ellipses
+        // Replace curly quotes, em dashes, and ellipses with ASCII equivalents
         let normalized_content = self.content
-            .replace('‘', "'")
-            .replace('’', "'")
-            .replace('“', "\"")
-            .replace('”', "\"")
+            .replace(['‘', '’'], "'")
+            .replace(['“', '”'], "\"")
             .replace('—', "--")
             .replace('…', "...");
 
@@ -43,7 +41,7 @@ impl fmt::Display for ModelSegment {
     /// Formats the ModelSegment for display in the terminal.
     /// TODO: Replace with ratatui rendering later.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Take a chat message, if the role is not user, for now we will assume it's from navi. This should be the case, for now.
+        // Map source to display prefix
         let role_str = match self.source {
             Source::User => "user",
             Source::Model => "navi",
@@ -58,12 +56,12 @@ impl fmt::Display for ModelSegment {
 /// Represents the model input context, holding a collection of ModelSegments.
 #[derive(Serialize, Debug)]
 pub struct Context {
-    /// Collection of ModelSegments representing the model input in it's entirety.
+    /// Collection of ModelSegments representing the model input in its entirety.
     pub items: Vec<ModelSegment>,
 }
 
 impl Context {
-    /// Creates a new, empty Context.
+    /// Creates a new Context with the default system directive.
     pub fn new() -> Self {
         let sys_directive = ModelSegment {
             source: Source::Directive,
@@ -105,6 +103,38 @@ pub struct Choice {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Macro to generate multiple normalization test cases.
+    /// $name:ident is the name of the test function (use a name that describes the rule; this can be helpful for identifying failing tests)
+    /// $input:expr is the input string to be normalized
+    /// $expected:expr is the expected output string after normalization
+    /// The macro generates a test function that asserts the normalization result matches the expected output.
+    macro_rules! test_normalize_rules {
+        ( $($name:ident: $input:expr => $expected:expr,)+ ) => {
+            $(
+                #[test]
+                fn $name() {
+                    let segment = ModelSegment {
+                        source: Source::User,
+                        content: $input.to_string(),
+                    };
+                    let normalized = segment.normalized();
+                    assert_eq!(normalized.content, $expected);
+                }
+            )+
+        };
+    }
+
+    test_normalize_rules! {
+        test_normalize_rules_right_single_quote: "It’s a test." => "It's a test.",
+        test_normalize_rules_left_single_quote: "‘Hello’" => "'Hello'",
+        test_normalize_rules_right_double_quote: "She said, “Hello!”" => "She said, \"Hello!\"",
+        test_normalize_rules_left_double_quote: "“Quote”" => "\"Quote\"",
+        test_normalize_rules_em_dash: "Wait—what?" => "Wait--what?",
+        test_normalize_rules_ellipsis: "And then…" => "And then...",
+        test_normalize_rules_mixed_content: "‘Hello’—world…" => "'Hello'--world...",
+        test_normalize_rules_no_special_chars: "Hello world" => "Hello world",
+    }
 
     #[test]
     fn test_chat_message_display() {
