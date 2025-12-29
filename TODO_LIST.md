@@ -38,6 +38,10 @@ High-level project roadmap and feature backlog for Navi.
 - [ ] **API Key Management** — Secure storage via environment variables or config
 - [ ] **Conversation Persistence** — Save/load chat sessions to disk
 - [ ] **User Preferences** — Customize prompt style, default model, etc.
+- [ ] **Text Normalization Rules** — User-defined character/pattern replacements
+  - [ ] Config-based mappings (TOML/YAML)
+  - [ ] Simple DSL for transformation rules
+  - [ ] Explore parser combinators (`nom`) for advanced patterns
 
 ### User Experience
 - [ ] **Better Command System** — Expand beyond /quit and /help

@@ -18,6 +18,27 @@ pub struct ModelSegment {
     pub content: String,
 }
 
+impl ModelSegment {
+    /// Returns a new ModelSegment with normalized content.
+    /// Replaces typographic characters with ASCII equivalents.
+    pub fn normalized(&self) -> ModelSegment {
+
+        // Strip the curly quotes, em dashes, and ellipses
+        let normalized_content = self.content
+            .replace('‘', "'")
+            .replace('’', "'")
+            .replace('“', "\"")
+            .replace('”', "\"")
+            .replace('—', "--")
+            .replace('…', "...");
+
+        ModelSegment {
+            source: self.source.clone(),
+            content: normalized_content,
+        }
+    }
+}
+
 impl fmt::Display for ModelSegment {
     /// Formats the ModelSegment for display in the terminal.
     /// TODO: Replace with ratatui rendering later.

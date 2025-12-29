@@ -29,7 +29,7 @@ use std::env;
 /// ```
 pub async fn model_completion(context: &Context) -> Result<ModelSegment, Box <dyn std::error::Error>> {
     let req = ModelRequest {
-        model: "nvidia/nemotron-nano-12b-v2-vl:free".to_string(),
+        model: env::var("PRIMARY_MODEL_NAME")?,
         messages: context.items.to_vec(),
     };
 
@@ -46,7 +46,7 @@ pub async fn model_completion(context: &Context) -> Result<ModelSegment, Box <dy
 
     let res: ModelResponse = response.json().await?;
 
-    let message = res.choices.first().ok_or("No valid response from API!")?.message.clone();
+    let message = res.choices.first().ok_or("No valid response from API!")?.message.normalized();
     
     Ok(message)
 }
