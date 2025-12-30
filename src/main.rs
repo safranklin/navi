@@ -2,6 +2,9 @@ use std::io;
 use std::io::Write;
 
 mod api;
+mod core;
+mod tui;
+
 use api::{client, ModelSegment, Source};
 
 use crate::api::Context;
