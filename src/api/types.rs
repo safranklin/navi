@@ -1,4 +1,3 @@
-use std::fmt;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -37,22 +36,6 @@ impl ModelSegment {
     }
 }
 
-impl fmt::Display for ModelSegment {
-    /// Formats the ModelSegment for display in the terminal.
-    /// TODO: Replace with ratatui rendering later.
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Map source to display prefix
-        let role_str = match self.source {
-            Source::User => "user",
-            Source::Model => "navi",
-            Source::Directive => "system",
-        };
-
-        let content = &self.content;
-        write!(f, "{}> {}", role_str, content)
-    }
-}
-
 /// Represents the model input context, holding a collection of ModelSegments.
 #[derive(Serialize, Debug)]
 pub struct Context {
@@ -75,6 +58,14 @@ impl Context {
     pub fn add(&mut self, segment: ModelSegment) -> &ModelSegment {
         self.items.push(segment);
         self.items.last().expect("just added an element to the context so it must exist")
+    }
+    /// Adds a user message to the context.
+    pub fn add_user_message(&mut self, content: String) -> &ModelSegment {
+        let segment = ModelSegment {
+            source: Source::User,
+            content,
+        };
+        self.add(segment)
     }
 }
 
@@ -134,51 +125,6 @@ mod tests {
         test_normalize_rules_ellipsis: "And then…" => "And then...",
         test_normalize_rules_mixed_content: "‘Hello’—world…" => "'Hello'--world...",
         test_normalize_rules_no_special_chars: "Hello world" => "Hello world",
-    }
-
-    #[test]
-    fn test_chat_message_display() {
-        let msg = ModelSegment {
-            source: Source::User,
-            content: "hello".to_string(),
-        };
-        assert_eq!(msg.to_string(), "user> hello");
-    }
-
-    #[test]
-    fn test_chat_message_display_model() {
-        let msg = ModelSegment {
-            source: Source::Model,
-            content: "hi there".to_string(),
-        };
-        assert_eq!(msg.to_string(), "navi> hi there");
-    }
-
-    #[test]
-    fn test_chat_message_display_directive() {
-        let msg = ModelSegment {
-            source: Source::Directive,
-            content: "system message".to_string(),
-        };
-        assert_eq!(msg.to_string(), "system> system message");
-    }
-
-    #[test]
-    fn test_collection_display() {
-        let msgs = vec![
-            ModelSegment {
-                source: Source::User, // This segment of the context is from the user
-                content: "hello".to_string(),
-            },
-            ModelSegment {
-                source: Source::Model, // This segment of the context is from the model
-                content: "hi there".to_string(),
-            },
-        ];
-        let collection = Context { items: msgs };
-
-        let display_output: Vec<String> = collection.items.iter().map(|m| m.to_string()).collect();
-        assert_eq!(display_output, vec!["user> hello", "navi> hi there"]);
     }
 
     #[test]
