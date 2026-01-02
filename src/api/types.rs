@@ -24,10 +24,11 @@ impl ModelSegment {
 
         // Replace curly quotes, em dashes, and ellipses with ASCII equivalents
         let normalized_content = self.content
-            .replace(['‘', '’'], "'")
-            .replace(['“', '”'], "\"")
-            .replace('—', "--")
-            .replace('…', "...");
+            .trim() // Trim leading and trailing whitespace
+            .replace(['‘', '’'], "'") // Single quotes
+            .replace(['“', '”'], "\"") // Double quotes
+            .replace('—', "--") // Em dash
+            .replace('…', "..."); // Ellipsis
 
         ModelSegment {
             source: self.source.clone(),
