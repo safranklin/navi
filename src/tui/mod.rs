@@ -43,7 +43,7 @@ pub fn run() -> std::io::Result<()> {
                     update(&mut app, Action::ResponseReceived(response));
                 }
                 Err(e) => {
-                    app.status_message = format!("Error: {}", e);
+                    app.error = Some(format!("API ERROR: {}\n\nPress Esc to quit", e));
                     app.is_loading = false;
                 }
             }

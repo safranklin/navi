@@ -1,4 +1,4 @@
-use crate::api::{ModelSegment, Source};
+use crate::api::Source;
 use crate::core::state::App;
 
 use ratatui::{Frame};
@@ -11,36 +11,74 @@ pub fn draw_ui(frame: &mut Frame, app: &App) {
     let layout = Layout::vertical([Length(1), Min(0), Length(3)]);
     let [title_area, main_area, input_area] = layout.areas(frame.area());
 
+    // Title bar - always rendered
+    let title_text = if app.status_message.is_empty() {
+        format!("Navi Interface (model: {})", app.model_name)
+    } else {
+        format!("Navi Interface (model: {}) | {}", app.model_name, app.status_message)
+    };
+    frame.render_widget(Span::raw(title_text), title_area);
+
+    // Main area - show error OR chat
+    if let Some(error_msg) = &app.error {
+        draw_error_view(frame, main_area, error_msg);
+    } else {
+        draw_context_area(frame, main_area, app);
+    }
+
+    // Input area - always rendered
     let input = Paragraph::new(app.input_buffer.as_str()).block(Block::bordered().title("Input"));
-    frame.render_widget(Span::raw(format!("Navi Interface (model: {})", app.model_name)), title_area);
-    draw_context_area(frame, main_area, app);
     frame.render_widget(input, input_area);
 }
 
-fn draw_context_area(frame: &mut Frame, area: Rect, app: &App) {
-    use ratatui::widgets::{List, ListItem};
+fn draw_error_view(frame: &mut Frame, area: Rect, error_msg: &str) {
+    use ratatui::layout::Alignment;
 
-    let items: Vec<ListItem> = app
-        .context
-        .items
-        .iter()
-        .map(|seg| ListItem::new(format_context_item(seg)))
-        .collect();
+    let error_paragraph = Paragraph::new(error_msg)
+        .block(Block::bordered().title("ERROR"))
+        .alignment(Alignment::Center);
 
-    let chat = List::new(items).block(Block::bordered().title("Chat"));
-    frame.render_widget(chat, area);
+    frame.render_widget(error_paragraph, area);
 }
 
-fn format_context_item(segment: &ModelSegment) -> String {
-    // Map source to display prefix
-    let role_str = match segment.source {
+fn draw_context_area(frame: &mut Frame, area: Rect, app: &App) {
+    use ratatui::widgets::Wrap;
+    let mut y_offset: u16 = 0;
+
+    for segment in &app.context.items {
+        let role_string = format_role(&segment.source);
+        let paragraph = Paragraph::new(segment.content.as_str())
+            .wrap(Wrap { trim: true })
+            .block(Block::bordered().title(role_string));
+
+        let inner_width = area.width.saturating_sub(2); // Account for borders
+        let height = (paragraph.line_count(inner_width)) as u16; // +2 for top and bottom borders
+
+        if y_offset + height > area.height {
+            break; // No more space to render additional segments
+        }
+
+        let segment_area = Rect {
+            x: area.x,
+            y: area.y + y_offset,
+            width: area.width,
+            height,
+        };
+
+        frame.render_widget(paragraph, segment_area);
+        y_offset += height;
+    }
+
+    let _ = (frame, area, app); // Remove this line when implementing
+}
+
+/// Maps a Source to its display string
+fn format_role(source: &Source) -> &'static str {
+    match source {
         Source::User => "user",
         Source::Model => "navi",
         Source::Directive => "system",
-    };
-
-    let content = &segment.content;
-    format!("{}> {}", role_str, content)
+    }
 }
 
 #[cfg(test)]
@@ -48,33 +86,6 @@ mod tests {
     use super::*;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
-    #[test]
-    fn test_format_context_item() {
-        let user_segment = ModelSegment {
-            source: Source::User,
-            content: String::from("Hello, model!"),
-        };
-        let model_segment = ModelSegment {
-            source: Source::Model,
-            content: String::from("Hello, user!"),
-        };
-        let directive_segment = ModelSegment {
-            source: Source::Directive,
-            content: String::from("You are a helpful assistant."),
-        };
-        assert_eq!(
-            format_context_item(&user_segment),
-            "user> Hello, model!"
-        );
-        assert_eq!(
-            format_context_item(&model_segment),
-            "navi> Hello, user!"
-        );
-        assert_eq!(
-            format_context_item(&directive_segment),
-            "system> You are a helpful assistant."
-        );
-    }
 
     #[test]
     fn test_draw_ui() {

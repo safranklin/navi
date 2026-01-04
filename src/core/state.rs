@@ -11,7 +11,8 @@
 //! ├── status_message: String   // status bar text
 //! ├── should_quit: bool        // exit signal
 //! ├── is_loading: bool         // waiting for API response
-//! └── model_name: String       // current model
+//! ├── model_name: String       // current model
+//! └── error: Option<String>    // error message
 //! ```
 //!
 //! State changes only happen through `update(state, action)` in action.rs.
@@ -27,6 +28,7 @@ pub struct App {
     pub should_quit: bool, // exit signal
     pub is_loading: bool, // waiting for API response
     pub model_name: String, // current model
+    pub error: Option<String>, // error message
 }
 
 impl App {
@@ -39,6 +41,7 @@ impl App {
             should_quit: false,
             is_loading: false,
             model_name,
+            error: None,
         }
     }
 }
