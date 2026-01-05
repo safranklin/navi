@@ -1,10 +1,46 @@
-use crate::api::Source;
+use crate::api::{Source, ModelSegment};
 use crate::core::state::App;
 
-use ratatui::{Frame};
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::Span;
-use ratatui::widgets::{Block, Paragraph};
+use ratatui::widgets::{Block, Paragraph, Wrap};
+
+struct RenderedSegment<'a> {
+    // 'a to tie this structs lifetime to the ModelSegment reference's lifetime to be explicit about lifetimes
+    #[allow(dead_code)]
+    segment: &'a ModelSegment,
+    paragraph: Paragraph<'a>,
+    height: u16,
+}
+
+// Implement a constructor for RenderedSegment to encapsulate the creation logic (and height calculations)
+impl<'a> RenderedSegment<'a> {
+    fn new(segment: &'a ModelSegment, window_area: Rect) -> Self {
+        let role = format_role(&segment.source);
+        let paragraph = Paragraph::new(segment.content.as_str())
+            .block(Block::bordered().title(role))
+            .wrap(Wrap { trim: true });
+
+        let inner_width = window_area.width.saturating_sub(2); // Account for borders
+        let height = (paragraph.line_count(inner_width)) as u16; // Calculate height based on content and width of viewport
+
+        RenderedSegment {
+            segment,
+            paragraph,
+            height,
+        }
+    }
+
+    fn render_coords(&self, y_offset: u16, area: &Rect) -> Rect {
+        Rect {
+            x: area.x,
+            y: area.y + y_offset,
+            width: area.width,
+            height: self.height,
+        }
+    }
+}
 
 pub fn draw_ui(frame: &mut Frame, app: &App) {
     use Constraint::{Length, Min};
@@ -42,35 +78,45 @@ fn draw_error_view(frame: &mut Frame, area: Rect, error_msg: &str) {
 }
 
 fn draw_context_area(frame: &mut Frame, area: Rect, app: &App) {
-    use ratatui::widgets::Wrap;
+    let visible_segments = collect_visible_segments(&app.context.items, area);
     let mut y_offset: u16 = 0;
 
-    for segment in &app.context.items {
-        let role_string = format_role(&segment.source);
-        let paragraph = Paragraph::new(segment.content.as_str())
-            .wrap(Wrap { trim: true })
-            .block(Block::bordered().title(role_string));
+    for segment in visible_segments {
 
-        let inner_width = area.width.saturating_sub(2); // Account for borders
-        let height = (paragraph.line_count(inner_width)) as u16; // +2 for top and bottom borders
-
-        if y_offset + height > area.height {
+        if y_offset + segment.height > area.height {
             break; // No more space to render additional segments
         }
 
-        let segment_area = Rect {
-            x: area.x,
-            y: area.y + y_offset,
-            width: area.width,
-            height,
-        };
+        let segment_area = segment.render_coords(y_offset, &area);
 
-        frame.render_widget(paragraph, segment_area);
-        y_offset += height;
+        frame.render_widget(segment.paragraph, segment_area);
+        y_offset += segment.height;
+    }
+}
+
+fn collect_visible_segments(
+    segments: &[ModelSegment],
+    area: Rect,
+) -> Vec<RenderedSegment<'_>> {
+    let mut visible = Vec::new();
+    let mut accumulated_height: u16 = 0;
+
+    for segment in segments.iter().rev() {
+        let rendered_segment = RenderedSegment::new(segment, area);
+        let segment_height = rendered_segment.height;
+
+        if accumulated_height + segment_height > area.height {
+            break; // No more space to add this segment
+        }
+
+        visible.push(rendered_segment);
+        accumulated_height += segment_height;
     }
 
-    let _ = (frame, area, app); // Remove this line when implementing
+    visible.reverse();
+    visible
 }
+
 
 /// Maps a Source to its display string
 fn format_role(source: &Source) -> &'static str {
@@ -86,6 +132,13 @@ mod tests {
     use super::*;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+    
+    #[test]
+    fn test_format_role() {
+        assert_eq!(format_role(&Source::User), "user");
+        assert_eq!(format_role(&Source::Model), "navi");
+        assert_eq!(format_role(&Source::Directive), "system");
+    }
 
     #[test]
     fn test_draw_ui() {
@@ -117,5 +170,175 @@ mod tests {
             })
             .unwrap();
         // If no panic occurs, we assume the drawing was successful.
+    }
+
+    #[test]
+    fn test_collect_visible_segments() {
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 10,
+        };
+
+        let segments = vec![
+            ModelSegment {
+                source: Source::User,
+                content: "Short message".to_string(),
+            },
+            ModelSegment {
+                source: Source::Model,
+                content: "This is a longer message that should take up more space in the UI.".to_string(),
+            },
+            ModelSegment {
+                source: Source::Directive,
+                content: "System directive message".to_string(),
+            },
+        ];
+
+        let visible_segments = collect_visible_segments(&segments, area);
+        assert!(!visible_segments.is_empty());
+    }
+
+    #[test]
+    fn test_collect_visible_segments_no_fit() {
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 2,
+        };
+
+        let segments = vec![
+            ModelSegment {
+                source: Source::User,
+                content: "This message is way too long to fit".to_string(),
+            },
+        ];
+
+        let visible_segments = collect_visible_segments(&segments, area);
+        assert!(visible_segments.is_empty());
+    }
+
+    #[test]
+    fn test_collect_visible_segments_exact_fit() {
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 3 + 3 + 4, // 3 segments with heights 3, 3, and 4 respectively
+        };
+
+        let segments = vec![
+            ModelSegment {
+                source: Source::User,
+                content: "Msg1".to_string(), // 1 line (+ borders = 3)
+            },
+            ModelSegment {
+                source: Source::Model,
+                content: "Msg2".to_string(), // 1 line (+ borders = 3)
+            },
+            ModelSegment {
+                source: Source::Directive,
+                content: "Test Line 1\ntest line 2".to_string(), // 2 lines (+ borders = 4)
+            },
+        ];
+
+        let visible_segments = collect_visible_segments(&segments, area);
+        assert_eq!(visible_segments.len(), 3);
+    }
+
+    #[test]
+    fn test_collect_visible_segments_empty() {
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 10,
+        };
+
+        let segments: Vec<ModelSegment> = vec![];
+
+        let visible_segments = collect_visible_segments(&segments, area);
+        assert!(visible_segments.is_empty());
+    }
+
+    #[test]
+    fn test_collect_visible_segments_overflow() {
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 5,
+        };
+
+        let segments = vec![
+            ModelSegment {
+                source: Source::User,
+                content: "First message".to_string(),
+            },
+            ModelSegment {
+                source: Source::Model,
+                content: "Second message that is a bit longer".to_string(),
+            },
+            ModelSegment {
+                source: Source::Directive,
+                content: "Third message\na\nb".to_string(),
+            },
+        ];
+
+        let visible_segments = collect_visible_segments(&segments, area);
+        assert_eq!(1, visible_segments.len());
+        // Ensure the newest segment (3rd message) is kept, not older ones
+        assert_eq!(visible_segments[0].segment.content, segments[2].content);
+    }
+
+    #[test]
+    fn test_collect_visible_segments_preserves_order() {
+        let area = Rect { x: 0, y: 0, width: 80, height: 6 };
+        
+        let segments = vec![
+            ModelSegment { source: Source::User, content: "OLD".to_string() },
+            ModelSegment { source: Source::Model, content: "MID".to_string() },
+            ModelSegment { source: Source::Directive, content: "NEW".to_string() },
+        ];
+
+        let visible = collect_visible_segments(&segments, area);
+        
+        assert_eq!(visible.len(), 2);
+        // Verify order: older visible first, newest last
+        assert_eq!(visible[0].segment.content, "MID");
+        assert_eq!(visible[1].segment.content, "NEW");
+    }
+
+    #[test]
+    fn test_render_coords() {
+        let segment = ModelSegment {
+            source: Source::User,
+            content: "Test".to_string(),
+        };
+        let area = Rect { x: 10, y: 20, width: 80, height: 100 };
+        let rendered = RenderedSegment::new(&segment, area);
+        
+        let coords = rendered.render_coords(5, &area);
+        
+        assert_eq!(coords.x, 10);        // Same as area.x
+        assert_eq!(coords.y, 25);        // area.y + y_offset
+        assert_eq!(coords.width, 80);    // Same as area.width
+        assert_eq!(coords.height, rendered.height);
+    }
+
+    #[test]
+    fn test_rendered_segment_height_includes_borders() {
+        let segment = ModelSegment {
+            source: Source::User,
+            content: "Single line".to_string(),
+        };
+        let area = Rect { x: 0, y: 0, width: 80, height: 100 };
+        
+        let rendered = RenderedSegment::new(&segment, area);
+        
+        // 1 line of content + 2 for borders = 3
+        assert_eq!(rendered.height, 3);
     }
 }
