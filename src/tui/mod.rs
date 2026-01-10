@@ -24,7 +24,7 @@ pub fn run() -> std::io::Result<()> {
     let mut terminal = ratatui::init();
     
     loop {
-        terminal.draw(|f| ui::draw_ui(f, &app))?;
+        terminal.draw(|f| ui::draw_ui(f, &mut app))?;
 
         if let Some(action) = poll_event() {
             update(&mut app, action);

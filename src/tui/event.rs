@@ -9,6 +9,8 @@ pub fn poll_event() -> Option<Action> {
                 KeyCode::Backspace => Some(Action::Backspace),
                 KeyCode::Enter => Some(Action::Submit),
                 KeyCode::Esc => Some(Action::Quit),
+                KeyCode::Up => Some(Action::ScrollUp),
+                KeyCode::Down => Some(Action::ScrollDown),
                 _ => None,
             }
         } else {

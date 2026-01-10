@@ -11,3 +11,4 @@ serde_json = { version = "1.0" }
 dotenv = { version = "0.15" }
 ratatui = { version = "0.30.0", features = ["unstable-rendered-line-info"] }
 crossterm = "0.29.0"
+tui-scrollview = "0.6"

@@ -5,30 +5,33 @@
 //!
 //! ```text
 //! App
-//! ├── context: Context         // conversation history (reuses api::types)
-//! ├── input_buffer: String     // what the user is currently typing
-//! ├── scroll_offset: usize     // where in the chat history we're viewing
-//! ├── status_message: String   // status bar text
-//! ├── should_quit: bool        // exit signal
-//! ├── is_loading: bool         // waiting for API response
-//! ├── model_name: String       // current model
-//! └── error: Option<String>    // error message
+//! ├── context: Context                    // conversation history
+//! ├── input_buffer: String                // what the user is currently typing
+//! ├── scroll_state: ScrollViewState       // scroll position (owned by tui-scrollview)
+//! ├── has_unseen_content: bool            // "↓ New" indicator
+//! ├── status_message: String              // status bar text
+//! ├── should_quit: bool                   // exit signal
+//! ├── is_loading: bool                    // waiting for API response
+//! ├── model_name: String                  // current model
+//! └── error: Option<String>               // error message
 //! ```
 //!
 //! State changes only happen through `update(state, action)` in action.rs.
 //! This keeps things predictable, so no surprise mutations.
 
 use crate::api::Context;
+use tui_scrollview::ScrollViewState;
 
 pub struct App {
-    pub context: Context, // model state
-    pub input_buffer: String , // user input
-    // pub scroll_offset: usize, // where in the chat history we're viewing
-    pub status_message: String, // status bar text
-    pub should_quit: bool, // exit signal
-    pub is_loading: bool, // waiting for API response
-    pub model_name: String, // current model
-    pub error: Option<String>, // error message
+    pub context: Context,
+    pub input_buffer: String,
+    pub scroll_state: ScrollViewState,   // Component-owned scroll state
+    pub has_unseen_content: bool,        // Shows "↓ New" when content below viewport
+    pub status_message: String,
+    pub should_quit: bool,
+    pub is_loading: bool,
+    pub model_name: String,
+    pub error: Option<String>,
 }
 
 impl App {
@@ -36,7 +39,8 @@ impl App {
         Self {
             context: Context::new(),
             input_buffer: String::new(),
-            // scroll_offset: 0,
+            scroll_state: ScrollViewState::default(),
+            has_unseen_content: false,
             status_message: String::from("Welcome to Navi!"),
             should_quit: false,
             is_loading: false,

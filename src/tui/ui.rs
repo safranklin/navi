@@ -2,9 +2,10 @@ use crate::api::{Source, ModelSegment};
 use crate::core::state::App;
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Layout, Rect, Size};
 use ratatui::text::Span;
 use ratatui::widgets::{Block, Paragraph, Wrap};
+use tui_scrollview::{ScrollView, ScrollbarVisibility};
 
 struct RenderedSegment<'a> {
     // 'a to tie this structs lifetime to the ModelSegment reference's lifetime to be explicit about lifetimes
@@ -42,13 +43,15 @@ impl<'a> RenderedSegment<'a> {
     }
 }
 
-pub fn draw_ui(frame: &mut Frame, app: &App) {
+pub fn draw_ui(frame: &mut Frame, app: &mut App) {
     use Constraint::{Length, Min};
     let layout = Layout::vertical([Length(1), Min(0), Length(3)]);
     let [title_area, main_area, input_area] = layout.areas(frame.area());
 
-    // Title bar - always rendered
-    let title_text = if app.status_message.is_empty() {
+    // Title bar - show "↓ New" indicator if there's unseen content
+    let title_text = if app.has_unseen_content {
+        format!("Navi Interface (model: {}) | {} | ↓ New", app.model_name, app.status_message)
+    } else if app.status_message.is_empty() {
         format!("Navi Interface (model: {})", app.model_name)
     } else {
         format!("Navi Interface (model: {}) | {}", app.model_name, app.status_message)
@@ -77,21 +80,34 @@ fn draw_error_view(frame: &mut Frame, area: Rect, error_msg: &str) {
     frame.render_widget(error_paragraph, area);
 }
 
-fn draw_context_area(frame: &mut Frame, area: Rect, app: &App) {
-    let visible_segments = collect_visible_segments(&app.context.items, area);
+fn draw_context_area(frame: &mut Frame, area: Rect, app: &mut App) {
+    // Leave 1 column for vertical scrollbar
+    let content_width = area.width.saturating_sub(1);
+
+    // Calculate total content height by summing all segment heights
+    let total_height: u16 = app.context.items
+        .iter()
+        .map(|seg| RenderedSegment::new(seg, area).height)
+        .sum();
+
+    // Create a ScrollView with the total content size
+    // - Vertical scrollbar always visible (for chat history)
+    // - Horizontal scrollbar hidden (content wraps)
+    let mut scroll_view = ScrollView::new(Size::new(content_width, total_height))
+        .vertical_scrollbar_visibility(ScrollbarVisibility::Always)
+        .horizontal_scrollbar_visibility(ScrollbarVisibility::Never);
+
+    // Render ALL segments into the ScrollView's internal buffer
     let mut y_offset: u16 = 0;
-
-    for segment in visible_segments {
-
-        if y_offset + segment.height > area.height {
-            break; // No more space to render additional segments
-        }
-
-        let segment_area = segment.render_coords(y_offset, &area);
-
-        frame.render_widget(segment.paragraph, segment_area);
-        y_offset += segment.height;
+    for segment in &app.context.items {
+        let rendered = RenderedSegment::new(segment, area);
+        let segment_rect = Rect::new(0, y_offset, content_width, rendered.height);
+        scroll_view.render_widget(rendered.paragraph, segment_rect);
+        y_offset += rendered.height;
     }
+
+    // Let ScrollView render the visible portion using scroll_state
+    frame.render_stateful_widget(scroll_view, area, &mut app.scroll_state);
 }
 
 fn collect_visible_segments(
@@ -144,10 +160,10 @@ mod tests {
     fn test_draw_ui() {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).unwrap();
-        let app = App::new("test-model".to_string());
+        let mut app = App::new("test-model".to_string());
         terminal
             .draw(|f| {
-                draw_ui(f, &app);
+                draw_ui(f, &mut app);
             })
             .unwrap();
         // If no panic occurs, we assume the drawing was successful.
@@ -157,7 +173,7 @@ mod tests {
     fn test_draw_context_area() {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).unwrap();
-        let app = App::new("test-model".to_string());
+        let mut app = App::new("test-model".to_string());
         terminal
             .draw(|f| {
                 let area = Rect {
@@ -166,7 +182,7 @@ mod tests {
                     width: 80,
                     height: 20,
                 };
-                draw_context_area(f, area, &app);
+                draw_context_area(f, area, &mut app);
             })
             .unwrap();
         // If no panic occurs, we assume the drawing was successful.
