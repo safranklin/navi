@@ -41,7 +41,7 @@ High-level project roadmap and feature backlog for Navi.
 ### Core Functionality
 - [x] **TUI Interface** — Replace blocking REPL with ratatui-based TUI
 - [x] **Message History** — Store conversation context across messages
-- [ ] **Scroll Support** — Navigate long conversations in chat panel
+- [x] **Scroll Support** — Navigate long conversations in chat panel (via tui-scrollview)
 - [ ] **System Prompts** — Define Navi's personality/behavior locally
 - [ ] **Multi-turn Conversations** — Send full message history to API
 - [ ] **Model Selection** — Allow user to choose/switch models via commands
@@ -77,7 +77,7 @@ High-level project roadmap and feature backlog for Navi.
 
 - [ ] **Error Handling Strategy** — Define custom error types vs using anyhow
 - [ ] **Logging System** — Add structured logging (tracing/log crate)
-- [x] **Testing Infrastructure** — 22 unit tests covering:
+- [x] **Testing Infrastructure** — 23 unit tests covering:
   - [x] parse_command (3 tests)
   - [x] ModelSegment Display (3 tests)
   - [x] Context operations (3 tests)
@@ -119,6 +119,7 @@ Track alongside "The Rust Programming Language" book chapters:
 - [x] Ch 16: Concurrency (async API calls, block_in_place - Session 4, 8)
 - [x] Ch 19: Macros (test_normalize_rules! - Session 6)
 - [x] Ch 20: Async/await (async runtime with Tokio - Session 4, 8)
+- [x] **Bonus: StatefulWidget pattern** — External crate integration with tui-scrollview (Session 9/10)
 
 ---
 

@@ -61,18 +61,12 @@ pub fn update(app_state: &mut App, action: Action) {
             app_state.context.add(segment);
             app_state.is_loading = false;
             app_state.status_message = String::from("Response received.");
-            // Note: With top-down scrolling, "unseen" indicator logic is more complex
-            // Would need to know if user is at bottom (requires UI geometry)
-            // For now, just add the content - user can scroll down to see it
         }
         Action::ScrollUp => {
             app_state.scroll_state.scroll_up();
         }
         Action::ScrollDown => {
             app_state.scroll_state.scroll_down();
-            // Clear indicator when user scrolls down (they're trying to catch up)
-            // TODO: Ideally check if actually at bottom, but that requires geometry from UI
-            app_state.has_unseen_content = false;
         }
     }
 }

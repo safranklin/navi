@@ -39,6 +39,14 @@ pub fn draw_ui(frame: &mut Frame, app: &mut App) {
     let layout = Layout::vertical([Length(1), Min(0), Length(3)]);
     let [title_area, main_area, input_area] = layout.areas(frame.area());
 
+    // Main area - show error OR chat
+    // Render this FIRST so we can update app.has_unseen_content based on scroll position
+    if let Some(error_msg) = &app.error {
+        draw_error_view(frame, main_area, error_msg);
+    } else {
+        draw_context_area(frame, main_area, app);
+    }
+
     // Title bar - show "↓ New" indicator if there's unseen content
     let title_text = if app.has_unseen_content {
         format!("Navi Interface (model: {}) | {} | ↓ New", app.model_name, app.status_message)
@@ -48,13 +56,6 @@ pub fn draw_ui(frame: &mut Frame, app: &mut App) {
         format!("Navi Interface (model: {}) | {}", app.model_name, app.status_message)
     };
     frame.render_widget(Span::raw(title_text), title_area);
-
-    // Main area - show error OR chat
-    if let Some(error_msg) = &app.error {
-        draw_error_view(frame, main_area, error_msg);
-    } else {
-        draw_context_area(frame, main_area, app);
-    }
 
     // Input area - always rendered
     let input = Paragraph::new(app.input_buffer.as_str()).block(Block::bordered().title("Input"));
@@ -99,6 +100,19 @@ fn draw_context_area(frame: &mut Frame, area: Rect, app: &mut App) {
 
     // Let ScrollView render the visible portion using scroll_state
     frame.render_stateful_widget(scroll_view, area, &mut app.scroll_state);
+
+    // Update "unseen content" indicator
+    // Check if we are at the bottom of the content
+    let current_offset = app.scroll_state.offset().y;
+    let visible_height = area.height;
+    
+    if total_height <= visible_height {
+        app.has_unseen_content = false;
+    } else {
+        let max_scroll = total_height.saturating_sub(visible_height);
+        // If we are at or past the max scroll, we are at the bottom
+        app.has_unseen_content = current_offset < max_scroll;
+    }
 }
 
 /// Maps a Source to its display string
