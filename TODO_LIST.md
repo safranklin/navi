@@ -63,7 +63,7 @@ High-level project roadmap and feature backlog for Navi.
   - [ ] `/clear` — Clear conversation history
   - [ ] `/save <filename>` — Save current session
   - [ ] `/load <filename>` — Load previous session
-- [ ] **Streaming Responses** — Display AI responses as they arrive
+- [x] **Streaming Responses** — Display AI responses as they arrive (Session 10)
 - [ ] **Syntax Highlighting** — Color output for code blocks
 - [ ] **Multi-line Input** — Support for longer prompts
 

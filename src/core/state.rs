@@ -22,13 +22,13 @@
 use crate::api::Context;
 use tui_scrollview::ScrollViewState;
 
+#[derive(Debug, PartialEq)]
 pub struct App {
     pub context: Context,
     pub input_buffer: String,
     pub scroll_state: ScrollViewState,   // Component-owned scroll state
     pub has_unseen_content: bool,        // Shows "↓ New" when content below viewport
     pub status_message: String,
-    pub should_quit: bool,
     pub is_loading: bool,
     pub model_name: String,
     pub error: Option<String>,
@@ -42,7 +42,6 @@ impl App {
             scroll_state: ScrollViewState::default(),
             has_unseen_content: false,
             status_message: String::from("Welcome to Navi!"),
-            should_quit: false,
             is_loading: false,
             model_name,
             error: None,
@@ -54,7 +53,6 @@ impl App {
 fn test_app_new_defaults() {
     let app = App::new("model".to_string());
     assert_eq!(app.status_message, "Welcome to Navi!");
-    assert!(!app.should_quit);
     assert!(!app.is_loading);
     assert!(app.input_buffer.is_empty());
 }

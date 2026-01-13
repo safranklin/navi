@@ -11,44 +11,76 @@ mod event;
 mod ui;
 
 use std::env;
-use tokio::runtime::{Handle};
-use tokio::task::block_in_place;
+// use tokio::runtime::Handle; // Removed
+// use tokio::task::block_in_place; // Removed
 
-use crate::api::client::model_completion;
-use crate::core::action::{Action, update};
+// use crate::api::client::model_completion; // Removed
+use crate::core::action::{Action, update, Effect};
 use crate::core::state::App;
 use crate::tui::event::poll_event;
+
+use std::sync::mpsc;
+use crate::api::client::stream_completion;
 
 pub fn run() -> std::io::Result<()> {
     let mut app = App::new(env::var("PRIMARY_MODEL_NAME").expect("PRIMARY_MODEL_NAME must be set"));
     let mut terminal = ratatui::init();
     
+    // Channel for actions from background tasks
+    let (tx, rx) = mpsc::channel();
+
     loop {
         terminal.draw(|f| ui::draw_ui(f, &mut app))?;
 
+        // Handle user input
         if let Some(action) = poll_event() {
-            update(&mut app, action);
+            let effect = update(&mut app, action);
+            match effect {
+                Effect::Quit => break,
+                Effect::SpawnRequest => {
+                    spawn_request(&app, tx.clone());
+                }
+                _ => {}
+            }
         }
 
-        if app.should_quit {
-            break;
-        }
-
-        if app.is_loading {
-            let result = block_in_place(|| {
-                Handle::current().block_on(model_completion(&app.context))
-            });
-            match result {
-                Ok(response) => {
-                    update(&mut app, Action::ResponseReceived(response));
+        // Handle background task actions (streaming responses)
+        while let Ok(action) = rx.try_recv() {
+            let effect = update(&mut app, action);
+             match effect {
+                Effect::Quit => break, // Should not happen from background task usually
+                Effect::SpawnRequest => {
+                    spawn_request(&app, tx.clone()); // Chain request?
                 }
-                Err(e) => {
-                    app.error = Some(format!("API ERROR: {}\n\nPress Esc to quit", e));
-                    app.is_loading = false;
-                }
+                _ => {}
             }
         }
     }
     ratatui::restore();
     Ok(())
+}
+
+fn spawn_request(app: &App, tx: mpsc::Sender<Action>) {
+    let context = app.context.clone();
+    
+    // Channel for the stream chunks (String)
+    let (str_tx, str_rx) = mpsc::channel();
+    
+    // Spawn async task to drive the stream
+    let tx_clone = tx.clone();
+    tokio::spawn(async move {
+        if let Err(e) = stream_completion(&context, str_tx).await {
+            let _ = tx_clone.send(Action::ResponseChunk(format!("\n[Error: {}]", e)));
+            let _ = tx_clone.send(Action::ResponseDone);
+        }
+    });
+    
+    // Spawn blocking task to forward chunks as Actions
+    let tx_forward = tx.clone();
+    tokio::task::spawn_blocking(move || {
+        while let Ok(chunk) = str_rx.recv() {
+            let _ = tx_forward.send(Action::ResponseChunk(chunk));
+        }
+        let _ = tx_forward.send(Action::ResponseDone);
+    }); 
 }

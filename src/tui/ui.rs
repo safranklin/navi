@@ -19,7 +19,8 @@ struct RenderedSegment<'a> {
 impl<'a> RenderedSegment<'a> {
     fn new(segment: &'a ModelSegment, window_area: Rect) -> Self {
         let role = format_role(&segment.source);
-        let paragraph = Paragraph::new(segment.content.as_str())
+        let content = segment.content.trim();
+        let paragraph = Paragraph::new(content)
             .block(Block::bordered().title(role))
             .wrap(Wrap { trim: true });
 
@@ -180,6 +181,21 @@ mod tests {
         let rendered = RenderedSegment::new(&segment, area);
         
         // 1 line of content + 2 for borders = 3
+        assert_eq!(rendered.height, 3);
+    }
+
+    #[test]
+    fn test_rendered_segment_trims_content() {
+        let segment = ModelSegment {
+            source: Source::Model,
+            content: "\n\n   Trim me   \n\n".to_string(),
+        };
+        let area = Rect { x: 0, y: 0, width: 80, height: 100 };
+        
+        let rendered = RenderedSegment::new(&segment, area);
+        
+        // "Trim me" is 1 line. + 2 for borders = 3.
+        // If it wasn't trimmed, it would be 5 lines + 2 = 7.
         assert_eq!(rendered.height, 3);
     }
 }

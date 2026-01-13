@@ -10,7 +10,7 @@ pub enum Source {
     Directive,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct ModelSegment {
     #[serde(rename = "role")]
     pub source: Source,
@@ -38,7 +38,7 @@ impl ModelSegment {
 }
 
 /// Represents the model input context, holding a collection of ModelSegments.
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct Context {
     /// Collection of ModelSegments representing the model input in its entirety.
     pub items: Vec<ModelSegment>,
@@ -60,13 +60,29 @@ impl Context {
         self.items.push(segment);
         self.items.last().expect("just added an element to the context so it must exist")
     }
-    /// Adds a user message to the context.
     pub fn add_user_message(&mut self, content: String) -> &ModelSegment {
         let segment = ModelSegment {
             source: Source::User,
             content,
         };
         self.add(segment)
+    }
+
+    /// Appends content to the last message if it is from the model.
+    /// If the last message is not from the model, creates a new one.
+    pub fn append_to_last_model_message(&mut self, content: &str) {
+        if let Some(last) = self.items.last_mut() {
+            if last.source == Source::Model {
+                last.content.push_str(content);
+                return;
+            }
+        }
+        
+        // If we get here, either no items or last item is not model
+        self.add(ModelSegment {
+            source: Source::Model,
+            content: content.to_string(),
+        });
     }
 }
 
@@ -75,6 +91,8 @@ impl Context {
 pub struct ModelRequest {
     pub model: String,
     pub messages: Vec<ModelSegment>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream: Option<bool>,
 }
 
 /// Represents the response from the Model API
@@ -90,6 +108,23 @@ pub struct ModelResponse {
 #[derive(Deserialize, Debug)]
 pub struct Choice {
     pub message: ModelSegment,
+}
+
+/// Represents the streaming response from the Model API
+#[derive(Deserialize, Debug)]
+pub struct ModelStreamResponse {
+    pub choices: Vec<StreamChoice>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct StreamChoice {
+    pub delta: Delta,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct Delta {
+    pub content: Option<String>,
+    pub role: Option<String>,
 }
 
 #[cfg(test)]
@@ -172,10 +207,29 @@ mod tests {
                     content: "hi there".to_string(),
                 },
             ],
+            stream: None,
         };
 
         let serialized = serde_json::to_string(&req).unwrap();
         let expected = r#"{"model":"test-model","messages":[{"role":"user","content":"hello"},{"role":"assistant","content":"hi there"}]}"#;
         assert_eq!(serialized, expected);
+    }
+
+    #[test]
+    fn test_context_append_to_last_model_message() {
+        let mut ctx = Context::new();
+        // Add user message
+        ctx.add_user_message("hello".to_string());
+        
+        // Append to non-model message (should create new)
+        ctx.append_to_last_model_message("start");
+        assert_eq!(ctx.items.len(), 3); // System, User, Model
+        assert_eq!(ctx.items[2].content, "start");
+        assert_eq!(ctx.items[2].source, Source::Model);
+        
+        // Append to model message (should append)
+        ctx.append_to_last_model_message(" continued");
+        assert_eq!(ctx.items.len(), 3);
+        assert_eq!(ctx.items[2].content, "start continued");
     }
 }

@@ -4,117 +4,80 @@ Current session state and recent progress for Navi development.
 
 ---
 
-## Current Session: Session 9/10 — tui-scrollview Integration
+## Current Session: Session 10 — Streaming & UI Polish
 
 **Status:** ✅ Complete
-**Date:** 2025-01-12
+**Date:** 2026-01-12
 
 ### What We Built
 
-Replaced custom scroll logic with the `tui-scrollview` crate to learn the **StatefulWidget pattern**:
+1. **Fixed "Unseen Content" Indicator:**
+   - Implemented proper geometry-based detection in `src/tui/ui.rs`.
+   - Uses `ScrollViewState` offset and viewport height to determine if user is at the bottom.
+   - Reordered rendering in `draw_ui` to ensure title bar reflects the latest state.
 
-**Key Concept — StatefulWidget:**
-- Widget owns its state (`ScrollViewState`)
-- Call methods like `scroll_up()`/`scroll_down()` to modify state
-- Widget reads state during render via `render_stateful_widget()`
+2. **Streaming Responses:**
+   - Refactored `src/tui/mod.rs` event loop to use `std::sync::mpsc` channels.
+   - Replaced blocking `block_in_place` API calls with non-blocking `tokio::spawn`.
+   - Implemented `stream_completion` in `src/api/client.rs` using `reqwest` stream feature.
+   - Added `Action::ResponseChunk` to handle incremental updates.
+   - Updated `Context` to append content to the last message.
 
-**Changes Made:**
+### Changes Made
 
-1. **Dependency** — Added `tui-scrollview = "0.6"` to Cargo.toml
-
-2. **State (`src/core/state.rs`):**
-   - Added `scroll_state: ScrollViewState` to App struct
-   - Added `has_unseen_content: bool` for "↓ New" indicator
-
-3. **Actions (`src/core/action.rs`):**
-   - Added `ScrollUp` and `ScrollDown` variants
-   - `ScrollUp` → `scroll_state.scroll_up()`
-   - `ScrollDown` → `scroll_state.scroll_down()` + clear indicator
-
-4. **UI (`src/tui/ui.rs`):**
-   - Changed signature: `draw_ui(&App)` → `draw_ui(&mut App)` (StatefulWidget needs mutable state)
-   - Rewrote `draw_context_area()` to use `ScrollView`
-   - Vertical scrollbar always visible, horizontal hidden
-   - Title bar shows "↓ New" when `has_unseen_content` is true
-
-5. **Integration (`src/tui/mod.rs`):**
-   - Changed to pass `&mut app` to `draw_ui()`
-
----
-
-## Files Changed This Session
-
-### Modified
-- `Cargo.toml` — Added tui-scrollview dependency
-- `src/core/state.rs` — Added ScrollViewState and has_unseen_content fields
-- `src/core/action.rs` — Added ScrollUp/ScrollDown actions
-- `src/tui/ui.rs` — Rewrote to use ScrollView component
-- `src/tui/mod.rs` — Changed to pass &mut app
+- `Cargo.toml`: Added `stream` feature to `reqwest` and `futures` dependency.
+- `src/tui/ui.rs`: Logic for `has_unseen_content` based on scroll offset.
+- `src/tui/mod.rs`: Complete rewrite of `run()` loop for async/streaming.
+- `src/api/client.rs`: Added `stream_completion` and SSE parsing logic.
+- `src/api/types.rs`: Added `ModelStreamResponse` types and `append_to_last_model_message`.
+- `src/core/action.rs`: Added `ResponseChunk`/`ResponseDone` actions.
+- `src/core/state.rs`: Added `should_spawn_request` flag.
 
 ---
 
 ## Build State
 
 **Compiles:** ✅ Yes
-**Tests:** ✅ 23 tests passing
-**Clippy:** ✅ Clean
+**Tests:** ✅ 24 tests passing
+**Clippy:** ⚠️ Some warnings about unused code (legacy non-streaming functions)
 
 **What works:**
-- Scrolling with arrow keys (Up/Down)
-- Vertical scrollbar always visible
-- "↓ New" indicator clears on scroll down
-- All previous functionality preserved
-
----
-
-## Concepts Learned This Session
-
-### Rust Concepts Applied
-- **StatefulWidget pattern** — Widget + separate state, connected via `render_stateful_widget()`
-- **Mutable borrows in render** — UI rendering needed `&mut App` to update scroll state
-- **External crate integration** — Using `tui-scrollview` from crates.io
-- **Coordinate systems** — Top-down (offset 0 = top) vs bottom-up approaches
-
-### Key Learning Moments
-- **StatefulWidget requires mutable state** — Had to change all function signatures from `&App` to `&mut App`
-- **Coordinate system matters** — tui-scrollview uses top-down (offset.y=0 is top), which affected "unseen content" logic
-- **Leave space for scrollbar** — Content width needs `saturating_sub(1)` for vertical scrollbar
+- "↓ New" indicator only appears when actually needed.
+- Responses stream in character-by-character (or chunk-by-chunk).
+- UI remains responsive during generation (though input is disabled by `is_loading`).
 
 ---
 
 ## Pending Decisions
 
-### ✅ Resolved This Session
-- Scroll implementation: tui-scrollview crate ✓
-- Alignment: Top-down (newest at bottom) ✓
-- Scrollbar: Vertical always, horizontal never ✓
-
 ### ⏳ To Decide (Future)
-- "Unseen content" indicator: proper at-bottom detection needs UI geometry
-- Config file format: TOML vs YAML?
-- Error handling strategy
+- **System Prompts:** Still need to implement configuration for this.
+- **Config File:** TOML vs YAML?
+- **Error Handling:** Improve error reporting in TUI (currently basic).
 
 ---
 
 ## Next Steps
 
 **Immediate:**
-- Commit session changes
+- Commit session changes.
 
 **Future (see TODO_LIST.md):**
-- System prompts refinement
-- Model selection command
-- Streaming responses
+- System Prompts & Configuration System.
+- Model Selection command.
 
 ---
 
 ## Previous Sessions Summary
 
-### Session 8 — TUI Implementation with Elm Architecture ✅
-- Full ratatui-based TUI replacing blocking REPL
-- Elm Architecture (MVU) pattern
-- 22 unit tests
+### Session 9 — tui-scrollview Integration ✅
+### Session 9 — Refactoring Control Flow ✅
+- Removed impure state flags (`should_quit`, `should_spawn_request`)
+- Introduced `Effect` enum in `update()` return type
+- pure state management pattern
+- 24 unit tests passing
 
+### Session 8 — TUI Implementation with Elm Architecture ✅
 ### Session 7 — TUI Planning ✅
 ### Session 6 — Text Normalization and Macros ✅
 ### Session 5 — Type Safety, Testing, and Conversation History ✅
@@ -125,5 +88,5 @@ Replaced custom scroll logic with the `tui-scrollview` crate to learn the **Stat
 
 ---
 
-**Last Updated:** 2025-01-12
-**Next Session:** System prompts, model selection, or streaming responses
+**Last Updated:** 2026-01-12
+**Next Session:** System Prompts & Configuration

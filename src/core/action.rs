@@ -26,47 +26,76 @@ pub enum Action {
     Backspace,
     // Submit the current input buffer as a message
     Submit,
-    // Receive a response segment from the API
+    // Receive a response segment from the API (non-streaming)
     ResponseReceived(ModelSegment),
+    // Receive a chunk of content from the API (streaming)
+    ResponseChunk(String),
+    // Signal that the streaming response is complete
+    ResponseDone,
     // Scroll the chat view up (see older messages)
     ScrollUp,
     // Scroll the chat view down (see newer messages)
     ScrollDown,
 }
 
-pub fn update(app_state: &mut App, action: Action) {
+#[derive(Debug, PartialEq)]
+pub enum Effect {
+    None,
+    Render, // Just re-render (default behavior really, but explicit is nice)
+    Quit,
+    SpawnRequest,
+}
+
+pub fn update(app_state: &mut App, action: Action) -> Effect {
     match action {
         Action::Quit => {
-            app_state.should_quit = true;
+            Effect::Quit
         }
         Action::InputChar(c) => {
             app_state.input_buffer.push(c);
+            Effect::Render
         }
         Action::Backspace => {
             if !app_state.input_buffer.is_empty() {
                 app_state.input_buffer.pop();
             }
+            Effect::Render
         }
         Action::Submit => {
             if app_state.input_buffer.is_empty() {
-                return; // noop on empty input
+                return Effect::None; // noop on empty input
             }
             let user_message = app_state.input_buffer.clone();
             app_state.context.add_user_message(user_message);
             app_state.input_buffer.clear();
             app_state.is_loading = true;
             app_state.status_message = String::from("Loading...");
+            Effect::SpawnRequest
         }
         Action::ResponseReceived(segment) => {
             app_state.context.add(segment);
             app_state.is_loading = false;
             app_state.status_message = String::from("Response received.");
+            Effect::Render
+        }
+        Action::ResponseChunk(chunk) => {
+            app_state.context.append_to_last_model_message(&chunk);
+            // We don't set is_loading = false here, as more chunks are coming
+            app_state.status_message = String::from("Receiving...");
+            Effect::Render
+        }
+        Action::ResponseDone => {
+            app_state.is_loading = false;
+            app_state.status_message = String::from("Response complete.");
+            Effect::Render
         }
         Action::ScrollUp => {
             app_state.scroll_state.scroll_up();
+            Effect::Render
         }
         Action::ScrollDown => {
             app_state.scroll_state.scroll_down();
+            Effect::Render
         }
     }
 }
@@ -77,37 +106,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_quit_sets_should_quit() {
+    fn test_quit_returns_quit_effect() {
         let mut app = App::new("test-model".to_string());
-        assert!(!app.should_quit);
         
-        update(&mut app, Action::Quit);
+        let effect = update(&mut app, Action::Quit);
         
-        assert!(app.should_quit);
+        assert_eq!(effect, Effect::Quit);
     }
     
     #[test]
     fn test_input_char_adds_character() {
         let mut app = App::new("test-model".to_string());
         app.input_buffer = String::from("Hello");
-        update(&mut app, Action::InputChar('!'));
+        let effect = update(&mut app, Action::InputChar('!'));
         assert_eq!(app.input_buffer, "Hello!");
+        assert_eq!(effect, Effect::Render);
     }
 
     #[test]
     fn test_backspace_removes_character() {
         let mut app = App::new("test-model".to_string());
         app.input_buffer = String::from("Hello!");
-        update(&mut app, Action::Backspace);
+        let effect = update(&mut app, Action::Backspace);
         assert_eq!(app.input_buffer, "Hello");
+        assert_eq!(effect, Effect::Render);
     }
 
     #[test]
     fn test_backspace_on_empty_buffer() {
         let mut app = App::new("test-model".to_string());
         app.input_buffer = String::new();
-        update(&mut app, Action::Backspace);
+        let effect = update(&mut app, Action::Backspace);
         assert_eq!(app.input_buffer, "");
+        assert_eq!(effect, Effect::Render);
     }
 
     #[test]
@@ -115,20 +146,22 @@ mod tests {
         let mut app = App::new("test-model".to_string());
         app.input_buffer = String::new();
         let initial_context_len = app.context.items.len();
-        update(&mut app, Action::Submit);
+        let effect = update(&mut app, Action::Submit);
         assert_eq!(app.context.items.len(), initial_context_len); // No new message added
         assert!(!app.is_loading); // is_loading should remain false
+        assert_eq!(effect, Effect::None);
     }
 
     #[test]
     fn test_submit_clears_input_and_adds_message() {
         let mut app = App::new("test-model".to_string());
         app.input_buffer = String::from("Hello, model!");
-        update(&mut app, Action::Submit);
+        let effect = update(&mut app, Action::Submit);
         assert_eq!(app.input_buffer, "");
         assert_eq!(app.context.items.len(), 2); // Assuming initial context contains the system directive and now the user message
         assert_eq!(app.context.items[1].content, "Hello, model!");
         assert!(app.is_loading);
+        assert_eq!(effect, Effect::SpawnRequest);
     }
 
     #[test]
@@ -138,9 +171,10 @@ mod tests {
             source: crate::api::types::Source::Model,
             content: String::from("Response from model."),
         };
-        update(&mut app, Action::ResponseReceived(segment.clone()));
+        let effect = update(&mut app, Action::ResponseReceived(segment.clone()));
         assert_eq!(app.context.items.len(), 2); // Assuming initial context contains, the system directive and now the model response
         assert_eq!(app.context.items[1].content, "Response from model.");
         assert!(!app.is_loading);
+        assert_eq!(effect, Effect::Render);
     }
 }
