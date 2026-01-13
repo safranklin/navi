@@ -20,21 +20,21 @@ pub struct ModelSegment {
 impl ModelSegment {
     /// Returns a new ModelSegment with normalized content.
     /// Replaces typographic characters with ASCII equivalents.
+    #[cfg(test)]
     pub fn normalized(&self) -> ModelSegment {
-
-        // Replace curly quotes, em dashes, and ellipses with ASCII equivalents
-        let normalized_content = self.content
-            .trim() // Trim leading and trailing whitespace
-            .replace(['‘', '’'], "'") // Single quotes
-            .replace(['“', '”'], "\"") // Double quotes
-            .replace('—', "--") // Em dash
-            .replace('…', "..."); // Ellipsis
-
         ModelSegment {
             source: self.source.clone(),
-            content: normalized_content,
+            content: replace_typography(&self.content).trim().to_string(),
         }
     }
+}
+
+/// Helper function to replace typographic characters with ASCII equivalents.
+fn replace_typography(text: &str) -> String {
+    text.replace(['‘', '’'], "'") // Single quotes
+        .replace(['“', '”'], "\"") // Double quotes
+        .replace('—', "--") // Em dash
+        .replace('…', "...") // Ellipsis
 }
 
 /// Represents the model input context, holding a collection of ModelSegments.
@@ -71,9 +71,11 @@ impl Context {
     /// Appends content to the last message if it is from the model.
     /// If the last message is not from the model, creates a new one.
     pub fn append_to_last_model_message(&mut self, content: &str) {
+        let normalized = replace_typography(content);
+        
         if let Some(last) = self.items.last_mut() {
             if last.source == Source::Model {
-                last.content.push_str(content);
+                last.content.push_str(&normalized);
                 return;
             }
         }
@@ -81,7 +83,7 @@ impl Context {
         // If we get here, either no items or last item is not model
         self.add(ModelSegment {
             source: Source::Model,
-            content: content.to_string(),
+            content: normalized,
         });
     }
 }
@@ -95,20 +97,7 @@ pub struct ModelRequest {
     pub stream: Option<bool>,
 }
 
-/// Represents the response from the Model API
-#[derive(Deserialize, Debug)]
-pub struct ModelResponse {
-    pub choices: Vec<Choice>,
-}
-
-/// Represents a single sampled path through the probability space. Because the model doesn't always return the most probable set of tokens,
-/// multiple choices can be returned if requested.
-/// 
-/// This response is a Token Segment
-#[derive(Deserialize, Debug)]
-pub struct Choice {
-    pub message: ModelSegment,
-}
+// ModelResponse and Choice removed
 
 /// Represents the streaming response from the Model API
 #[derive(Deserialize, Debug)]
@@ -124,7 +113,7 @@ pub struct StreamChoice {
 #[derive(Deserialize, Debug)]
 pub struct Delta {
     pub content: Option<String>,
-    pub role: Option<String>,
+    pub _role: Option<String>,
 }
 
 #[cfg(test)]
@@ -231,5 +220,17 @@ mod tests {
         ctx.append_to_last_model_message(" continued");
         assert_eq!(ctx.items.len(), 3);
         assert_eq!(ctx.items[2].content, "start continued");
+    }
+
+    #[test]
+    fn test_append_normalizes_content() {
+        let mut ctx = Context::new();
+        // Case 1: Typography in new message
+        ctx.append_to_last_model_message("Hello “World”");
+        assert_eq!(ctx.items.last().unwrap().content, "Hello \"World\"");
+
+        // Case 2: Typography in appended chunk
+        ctx.append_to_last_model_message("—WAIT");
+        assert_eq!(ctx.items.last().unwrap().content, "Hello \"World\"--WAIT");
     }
 }

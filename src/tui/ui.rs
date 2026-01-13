@@ -9,8 +9,6 @@ use tui_scrollview::{ScrollView, ScrollbarVisibility};
 
 struct RenderedSegment<'a> {
     // 'a to tie this structs lifetime to the ModelSegment reference's lifetime to be explicit about lifetimes
-    #[allow(dead_code)]
-    segment: &'a ModelSegment,
     paragraph: Paragraph<'a>,
     height: u16,
 }
@@ -28,7 +26,6 @@ impl<'a> RenderedSegment<'a> {
         let height = (paragraph.line_count(inner_width)) as u16; // Calculate height based on content and width of viewport
 
         RenderedSegment {
-            segment,
             paragraph,
             height,
         }

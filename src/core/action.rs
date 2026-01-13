@@ -14,7 +14,6 @@
 //! This makes everything testable: `assert_eq!(update(state, action), expected)`.
 //! And debuggable: log every action, replay the exact session.
 
-use crate::api::ModelSegment;
 use crate::core::state::App;
 
 pub enum Action {
@@ -26,8 +25,6 @@ pub enum Action {
     Backspace,
     // Submit the current input buffer as a message
     Submit,
-    // Receive a response segment from the API (non-streaming)
-    ResponseReceived(ModelSegment),
     // Receive a chunk of content from the API (streaming)
     ResponseChunk(String),
     // Signal that the streaming response is complete
@@ -71,12 +68,6 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
             app_state.is_loading = true;
             app_state.status_message = String::from("Loading...");
             Effect::SpawnRequest
-        }
-        Action::ResponseReceived(segment) => {
-            app_state.context.add(segment);
-            app_state.is_loading = false;
-            app_state.status_message = String::from("Response received.");
-            Effect::Render
         }
         Action::ResponseChunk(chunk) => {
             app_state.context.append_to_last_model_message(&chunk);
@@ -165,16 +156,34 @@ mod tests {
     }
 
     #[test]
-    fn test_response_received_adds_segment() {
+    fn test_response_chunk_appends_and_updates_status() {
         let mut app = App::new("test-model".to_string());
-        let segment = ModelSegment {
-            source: crate::api::types::Source::Model,
-            content: String::from("Response from model."),
-        };
-        let effect = update(&mut app, Action::ResponseReceived(segment.clone()));
-        assert_eq!(app.context.items.len(), 2); // Assuming initial context contains, the system directive and now the model response
-        assert_eq!(app.context.items[1].content, "Response from model.");
+        // Simulate loading state
+        app.is_loading = true;
+        
+        let chunk = String::from("Response ");
+        let effect = update(&mut app, Action::ResponseChunk(chunk));
+        
+        // Should have added the chunk to context
+        assert_eq!(app.context.items.len(), 2); // System + Model (new)
+        assert_eq!(app.context.items[1].content, "Response ");
+        assert_eq!(app.context.items[1].source, crate::api::types::Source::Model);
+        
+        // Should still be loading
+        assert!(app.is_loading);
+        assert_eq!(app.status_message, "Receiving...");
+        assert_eq!(effect, Effect::Render);
+    }
+
+    #[test]
+    fn test_response_done_stops_loading() {
+        let mut app = App::new("test-model".to_string());
+        app.is_loading = true;
+        
+        let effect = update(&mut app, Action::ResponseDone);
+        
         assert!(!app.is_loading);
+        assert_eq!(app.status_message, "Response complete.");
         assert_eq!(effect, Effect::Render);
     }
 }
