@@ -21,6 +21,7 @@ use crate::tui::event::poll_event;
 
 use std::sync::mpsc;
 use crate::api::client::stream_completion;
+use crate::api::types::StreamChunk;
 
 pub fn run() -> std::io::Result<()> {
     let mut app = App::new(env::var("PRIMARY_MODEL_NAME").expect("PRIMARY_MODEL_NAME must be set"));
@@ -63,7 +64,7 @@ pub fn run() -> std::io::Result<()> {
 fn spawn_request(app: &App, tx: mpsc::Sender<Action>) {
     let context = app.context.clone();
     
-    // Channel for the stream chunks (String)
+    // Channel for the stream chunks (StreamChunk)
     let (str_tx, str_rx) = mpsc::channel();
     
     // Spawn async task to drive the stream
@@ -79,7 +80,14 @@ fn spawn_request(app: &App, tx: mpsc::Sender<Action>) {
     let tx_forward = tx.clone();
     tokio::task::spawn_blocking(move || {
         while let Ok(chunk) = str_rx.recv() {
-            let _ = tx_forward.send(Action::ResponseChunk(chunk));
+            match chunk {
+                StreamChunk::Content(c) => {
+                    let _ = tx_forward.send(Action::ResponseChunk(c));
+                }
+                StreamChunk::Thinking(t) => {
+                    let _ = tx_forward.send(Action::ThinkingChunk(t));
+                }
+            }
         }
         let _ = tx_forward.send(Action::ResponseDone);
     }); 

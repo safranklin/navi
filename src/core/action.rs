@@ -27,6 +27,8 @@ pub enum Action {
     Submit,
     // Receive a chunk of content from the API (streaming)
     ResponseChunk(String),
+    // Receive a chunk of thinking/reasoning from the API
+    ThinkingChunk(String),
     // Signal that the streaming response is complete
     ResponseDone,
     // Scroll the chat view up (see older messages)
@@ -73,6 +75,11 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
             app_state.context.append_to_last_model_message(&chunk);
             // We don't set is_loading = false here, as more chunks are coming
             app_state.status_message = String::from("Receiving...");
+            Effect::Render
+        }
+        Action::ThinkingChunk(chunk) => {
+            app_state.context.append_to_last_thinking_message(&chunk);
+            app_state.status_message = String::from("Thinking...");
             Effect::Render
         }
         Action::ResponseDone => {

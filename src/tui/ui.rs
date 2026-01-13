@@ -3,6 +3,7 @@ use crate::core::state::App;
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect, Size};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 use ratatui::widgets::{Block, Paragraph, Wrap};
 use tui_scrollview::{ScrollView, ScrollbarVisibility};
@@ -17,9 +18,15 @@ struct RenderedSegment<'a> {
 impl<'a> RenderedSegment<'a> {
     fn new(segment: &'a ModelSegment, window_area: Rect) -> Self {
         let role = format_role(&segment.source);
+        let style = get_role_style(&segment.source);
+        let border_style = style.add_modifier(Modifier::DIM);
         let content = segment.content.trim();
         let paragraph = Paragraph::new(content)
-            .block(Block::bordered().title(role))
+            .block(Block::bordered()
+                .title(role)
+                .border_style(border_style)
+                .title_style(border_style))
+            .style(style)
             .wrap(Wrap { trim: true });
 
         let inner_width = window_area.width.saturating_sub(2); // Account for borders
@@ -119,6 +126,16 @@ fn format_role(source: &Source) -> &'static str {
         Source::User => "user",
         Source::Model => "navi",
         Source::Directive => "system",
+        Source::Thinking => "thought",
+    }
+}
+
+fn get_role_style(source: &Source) -> Style {
+    match source {
+        Source::Directive => Style::default().fg(Color::Yellow),
+        Source::User => Style::default().fg(Color::Cyan),
+        Source::Model => Style::default().fg(Color::Green),
+        Source::Thinking => Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
     }
 }
 
@@ -133,6 +150,7 @@ mod tests {
         assert_eq!(format_role(&Source::User), "user");
         assert_eq!(format_role(&Source::Model), "navi");
         assert_eq!(format_role(&Source::Directive), "system");
+        assert_eq!(format_role(&Source::Thinking), "thought");
     }
 
     #[test]

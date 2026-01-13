@@ -8,6 +8,8 @@ pub enum Source {
     Model,
     #[serde(rename = "system")]
     Directive,
+    #[serde(rename = "thought")]
+    Thinking,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -86,15 +88,40 @@ impl Context {
             content: normalized,
         });
     }
+
+    /// Appends content to the last message if it is a thinking message.
+    /// If the last message is not thinking, creates a new one.
+    pub fn append_to_last_thinking_message(&mut self, content: &str) {
+        let normalized = replace_typography(content);
+        
+        if let Some(last) = self.items.last_mut() {
+            if last.source == Source::Thinking {
+                last.content.push_str(&normalized);
+                return;
+            }
+        }
+        
+        self.add(ModelSegment {
+            source: Source::Thinking,
+            content: normalized,
+        });
+    }
 }
 
-/// Represents the request payload sent to the Model API
 #[derive(Serialize, Debug)]
 pub struct ModelRequest {
     pub model: String,
     pub messages: Vec<ModelSegment>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_reasoning: Option<bool>,
+}
+
+#[derive(Debug)]
+pub enum StreamChunk {
+    Content(String),
+    Thinking(String),
 }
 
 // ModelResponse and Choice removed
@@ -113,6 +140,7 @@ pub struct StreamChoice {
 #[derive(Deserialize, Debug)]
 pub struct Delta {
     pub content: Option<String>,
+    pub reasoning: Option<String>,
     pub _role: Option<String>,
 }
 
@@ -197,11 +225,25 @@ mod tests {
                 },
             ],
             stream: None,
+            include_reasoning: None,
         };
 
         let serialized = serde_json::to_string(&req).unwrap();
         let expected = r#"{"model":"test-model","messages":[{"role":"user","content":"hello"},{"role":"assistant","content":"hi there"}]}"#;
         assert_eq!(serialized, expected);
+    }
+
+    #[test]
+    fn test_context_append_to_last_thinking_message() {
+        let mut ctx = Context::new();
+        ctx.append_to_last_thinking_message("thinking");
+        assert_eq!(ctx.items.len(), 2);
+        assert_eq!(ctx.items[1].source, Source::Thinking);
+        assert_eq!(ctx.items[1].content, "thinking");
+
+        ctx.append_to_last_thinking_message(" more");
+        assert_eq!(ctx.items.len(), 2);
+        assert_eq!(ctx.items[1].content, "thinking more");
     }
 
     #[test]
