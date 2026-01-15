@@ -133,3 +133,168 @@ Options to explore:
 - Module organization (split into multiple files)
 
 ---
+
+## Session 4 — Async API Integration & JSON
+**Date:** 2025-12-04
+
+### What we built
+Integrated the OpenRouter API to allow real AI conversations.
+- Added dependencies: `tokio`, `reqwest`, `serde`, `dotenv`.
+- Created an `api` module with `ChatRequest`, `ChatResponse`, and `ChatMessage` structs.
+- Implemented an async client function `chat_completion`.
+- Updated the REPL to make network calls for non-command input.
+
+### Key concepts encountered
+
+#### Async/Await & Tokio
+Moved from a synchronous `main` to `#[tokio::main]`. Rust's async model is unique because futures do nothing unless polled. Tokio provides the runtime to poll them.
+- **Challenge:** Mixing async code with blocking I/O (stdin).
+- **Solution:** Used `.await?` for HTTP calls but kept stdin blocking for now (temporary hybrid approach).
+
+#### Serialization with Serde
+Used `serde` and `serde_json` to convert between Rust structs and JSON.
+- `#[derive(Serialize, Deserialize)]` generates the code to marshal data.
+- `#[serde(rename = "...")]` maps Rust's `snake_case` fields to API's `camelCase` or snake_case conventions.
+
+#### Result Propagation
+Used the `?` operator extensively to propagate errors up from the HTTP client to main.
+
+### Book chapters referenced
+- **Chapter 17:** Async/Await (conceptual)
+- **External Crates:** Cargo & Crates.io usage
+
+---
+
+## Session 5 — Domain Modeling & Type Safety
+**Date:** 2025-12-19
+
+### What we built
+Refactored the codebase to use strong types instead of raw strings.
+- Introduced `Role` enum (User, Assistant, System).
+- Created `Context` struct to manage conversation history.
+- Implemented `Display` trait for cleaner printing.
+- Added unit tests for parsing logic.
+
+### Key concepts encountered
+
+#### Type Safety vs "Stringly Typed"
+Replaced `String` for roles with `enum Role { User, Assistant, System }`. This prevents invalid roles (e.g., "admin") at compile time.
+
+#### The Display Trait
+Implemented `std::fmt::Display` for `Role` to customize how it prints. This is like `ToString` in other languages but trait-based.
+
+#### Testing
+Added `#[cfg(test)] mod tests { ... }` blocks. Rust places unit tests in the same file as the code, which allows testing private functions.
+
+### Book chapters referenced
+- **Chapter 10:** Traits (Display)
+- **Chapter 11:** Writing Automated Tests
+
+---
+
+## Session 6 — Personality & Normalization
+**Date:** 2025-12-28
+
+### What we built
+- Defined a System Directive to give Navi her "fairy guide" personality.
+- Implemented text normalization to clean up model output (converting fancy quotes to ASCII, etc.).
+
+### Key concepts encountered
+
+#### Macros
+Used `format!` macro for string interpolation.
+Used `vec!` macro for initializing vectors.
+
+#### Character Manipulation
+Iterated over characters to replace specific unicode points (em-dash, smart quotes) with ASCII equivalents.
+
+---
+
+## Session 7 — TUI Foundations
+**Date:** 2025-12-29
+
+### What we built
+Prepared for the transition from a CLI REPL to a full Terminal User Interface (TUI).
+- Added `ratatui` (rendering) and `crossterm` (events) dependencies.
+- Structured the `src/tui` module.
+
+### Key concepts encountered
+- **Immediate Mode Rendering:** Ratatui redraws the entire screen every frame based on state.
+- **Terminal Raw Mode:** Taking control of the terminal to capture key presses directly without waiting for "Enter".
+
+---
+
+## Session 8 — The TUI Rewrite (Elm Architecture)
+**Date:** 2025-12-31
+
+### What we built
+Completely replaced the REPL with a TUI application.
+- **State:** `App` struct holding history, input buffer, and mode.
+- **Action:** `Action` enum representing all possible events (KeyPress, Submit, Tick).
+- **Update:** Pure function `update(app, action) -> app`.
+- **View:** `ui::draw` function rendering the state to widgets.
+
+### Key concepts encountered
+
+#### The Elm Architecture / MVI
+Separating State, Update logic, and View. This makes the UI predictable and easier to debug.
+
+#### Event Loops
+Created a main loop that checks for terminal events (keypresses) and dispatches actions.
+
+#### Cross-thread Communication
+We have a TUI thread and need to make async network requests. Initially used a blocking bridge (`block_in_place`) as a temporary measure.
+
+---
+
+## Session 9 — Rendering & Viewports
+**Date:** 2026-01-04
+
+### What we built
+Improved the chat rendering logic.
+- Implemented "bottom-up" rendering to ensure the latest messages are always visible.
+- Added visual separation between messages.
+- Integrated `tui-scrollview` for better scrolling behavior.
+
+### Key concepts encountered
+- **Viewports:** calculating which part of the content is visible.
+- **Iterators:** Using `.rev()` to process messages from newest to oldest for bottom-up rendering.
+
+---
+
+## Session 10 — Async Streaming & Channels
+**Date:** 2026-01-12
+
+### What we built
+True async streaming response support.
+- Replaced blocking network calls with `tokio::spawn`.
+- Used `std::sync::mpsc` channels to send `Action::ResponseChunk` from the network task to the UI thread.
+- Updated the TUI to render partial chunks as they arrive.
+- "Thinking" indicator while waiting for the first chunk.
+
+### Key concepts encountered
+
+#### Concurrency & Channels
+Communication between the async network task and the synchronous UI rendering loop using channels (`Sender`/`Receiver`).
+
+#### Interior Mutability (RefCell/Mutex)
+Managed shared state challenges (though mostly avoided by using message passing).
+
+#### Pinning & Boxing
+Async streams often require `Pin<Box<dyn Stream...>>` to be used dynamically.
+
+---
+
+## Session 11 — Thinking Mode & Visual Polish
+**Date:** 2026-01-13
+
+### What we built
+- Support for "Reasoning Models" (like DeepSeek R1).
+- Parsed "thinking" tags/streams from the API.
+- Visual styling: Dark gray/italic for thinking, colors for roles (Navi=Green, User=Cyan).
+
+### Key concepts encountered
+- **Advanced UI Styling:** Using Ratatui's `Style` and `Color`.
+- **Complex State:** Handling multiple types of content (thought vs final answer) in the same message stream.
+
+---
