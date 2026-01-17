@@ -15,7 +15,8 @@ struct RenderedSegment<'a> {
 }
 
 impl<'a> RenderedSegment<'a> {
-    fn new(segment: &'a ModelSegment, window_area: Rect, is_hovered: bool) -> Self {
+    /// Create a rendered segment. If `cached_height` is provided, skip expensive line_count().
+    fn new(segment: &'a ModelSegment, window_area: Rect, is_hovered: bool, cached_height: Option<u16>) -> Self {
         let role = format_role(&segment.source);
         let base_style = get_role_style(&segment.source);
 
@@ -38,8 +39,11 @@ impl<'a> RenderedSegment<'a> {
             .style(style)
             .wrap(Wrap { trim: true });
 
-        let inner_width = window_area.width.saturating_sub(2);
-        let height = paragraph.line_count(inner_width) as u16;
+        // Use cached height if available, otherwise compute (expensive)
+        let height = cached_height.unwrap_or_else(|| {
+            let inner_width = window_area.width.saturating_sub(2);
+            paragraph.line_count(inner_width) as u16
+        });
 
         RenderedSegment { paragraph, height }
     }
@@ -87,22 +91,34 @@ fn draw_context_area(frame: &mut Frame, area: Rect, app: &App, tui: &mut TuiStat
     let content_width = area.width.saturating_sub(1);
     let num_items = app.context.items.len();
 
-    // Build segments and cache heights
+    // Check how many cached heights we can reuse
+    let reusable = tui.layout.reusable_count(num_items, content_width, app.is_loading);
+
+    // Build segments, using cached heights where available
     let segments: Vec<RenderedSegment> = app.context.items
         .iter()
         .enumerate()
         .map(|(index, seg)| {
+            // Use cached height if this segment hasn't changed AND cache exists for it
+            let cached_height = if index < reusable && index < tui.layout.heights.len() {
+                Some(tui.layout.heights[index])
+            } else {
+                None
+            };
+
             // Hover is active if: this is the hovered index AND NOT (last message while loading)
             let is_last = index == num_items.saturating_sub(1);
             let is_hovered = tui.hovered_index == Some(index) && !(is_last && app.is_loading);
-            RenderedSegment::new(seg, area, is_hovered)
+            RenderedSegment::new(seg, area, is_hovered, cached_height)
         })
         .collect();
 
-    // Cache heights for hit testing
-    tui.segment_heights = segments.iter().map(|s| s.height).collect();
+    // Update cache with all heights and prefix sums
+    tui.layout.heights = segments.iter().map(|s| s.height).collect();
+    tui.layout.rebuild_prefix_heights();
+    tui.layout.update_metadata(num_items, content_width);
 
-    let total_height: u16 = tui.segment_heights.iter().sum();
+    let total_height: u16 = tui.layout.heights.iter().sum();
 
     let mut scroll_view = ScrollView::new(Size::new(content_width, total_height))
         .vertical_scrollbar_visibility(ScrollbarVisibility::Always)
@@ -130,12 +146,13 @@ fn draw_context_area(frame: &mut Frame, area: Rect, app: &App, tui: &mut TuiStat
     }
 }
 
-/// Hit test: given a screen Y coordinate, find which message index (if any) is at that position
+/// Hit test: given a screen Y coordinate, find which message index (if any) is at that position.
+/// Uses binary search on prefix_heights for O(log n) performance.
 pub fn hit_test_message(
     screen_y: u16,
     frame_area: Rect,
     scroll_offset_y: u16,
-    segment_heights: &[u16],
+    prefix_heights: &[u16],
 ) -> Option<usize> {
     use Constraint::{Length, Min};
 
@@ -151,16 +168,15 @@ pub fn hit_test_message(
     // Convert screen Y to content Y (accounting for scroll)
     let content_y = (screen_y - main_area.y) + scroll_offset_y;
 
-    // Walk through cached heights to find which segment contains content_y
-    let mut accumulated_height: u16 = 0;
-    for (index, &height) in segment_heights.iter().enumerate() {
-        accumulated_height += height;
-        if content_y < accumulated_height {
-            return Some(index);
-        }
-    }
+    // Binary search: find first segment whose end position is > content_y
+    // partition_point returns the first index where predicate is false
+    let idx = prefix_heights.partition_point(|&end_y| end_y <= content_y);
 
-    None // Below all content
+    if idx < prefix_heights.len() {
+        Some(idx)
+    } else {
+        None // Below all content
+    }
 }
 
 fn format_role(source: &Source) -> &'static str {
@@ -216,7 +232,7 @@ mod tests {
         };
         let area = Rect { x: 0, y: 0, width: 80, height: 100 };
 
-        let rendered = RenderedSegment::new(&segment, area, false);
+        let rendered = RenderedSegment::new(&segment, area, false, None);
 
         // 1 line of content + 2 for borders = 3
         assert_eq!(rendered.height, 3);
@@ -230,7 +246,7 @@ mod tests {
         };
         let area = Rect { x: 0, y: 0, width: 80, height: 100 };
 
-        let rendered = RenderedSegment::new(&segment, area, false);
+        let rendered = RenderedSegment::new(&segment, area, false, None);
 
         // "Trim me" is 1 line. + 2 for borders = 3.
         assert_eq!(rendered.height, 3);

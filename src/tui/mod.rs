@@ -24,14 +24,80 @@ use std::sync::mpsc;
 use crate::api::client::stream_completion;
 use crate::api::types::StreamChunk;
 
+/// Cached layout measurements for efficient rendering and hit testing
+pub struct LayoutCache {
+    /// Individual segment heights
+    pub heights: Vec<u16>,
+    /// Cumulative heights for O(log n) hit testing via binary search
+    pub prefix_heights: Vec<u16>,
+
+    /// Internal metadata for cache validity
+    /// Message count when cache was last built
+    message_count: usize,
+    /// Content width when cache was last built
+    content_width: u16,
+}
+
+impl LayoutCache {
+    pub fn new() -> Self {
+        Self {
+            heights: Vec::new(),
+            prefix_heights: Vec::new(),
+            message_count: 0,
+            content_width: 0,
+        }
+    }
+
+    /// Returns how many cached heights are still valid and can be reused.
+    /// Returns 0 if full rebuild needed, or N if first N heights are reusable.
+    pub fn reusable_count(&self, message_count: usize, content_width: u16, is_loading: bool) -> usize {
+        // Return the number of heights that can be reused (0 = full rebuild).
+        if self.content_width != content_width {
+            0 // Full rebuild needed, width changed which can affect all message's heights
+        }
+        else if self.heights.is_empty() {
+            0 // Cache empty, nothing to reuse
+        }
+        else if message_count < self.message_count {
+            0 // Some message was removed, full rebuild needed since we don't track individual message validity; this is expected to be rare
+        }
+        else if is_loading {
+            if message_count == 0 {
+                0
+            } else {
+                message_count - 1 // Currently streaming, last message height may change
+            }
+        }
+        else {
+            message_count // All heights valid
+        }
+    }
+
+    /// Update cache metadata after rebuilding
+    pub fn update_metadata(&mut self, message_count: usize, content_width: u16) {
+        self.message_count = message_count;
+        self.content_width = content_width;
+    }
+
+    /// Rebuild prefix heights (cumulative sums) for O(log n) hit testing
+    pub fn rebuild_prefix_heights(&mut self) {
+        // prefix_heights[i] = sum of heights[0..=i]
+        // Example: heights = [3, 5, 4] → prefix_heights = [3, 8, 12]
+        self.prefix_heights = self.heights.iter().scan(0u16, |acc, &h| {
+            *acc += h; // update running total
+            Some(*acc) // yield current total
+        }).collect::<Vec<u16>>()
+    }
+}
+
 /// TUI-specific presentation state (not part of core business logic)
 pub struct TuiState {
     pub scroll_state: ScrollViewState,
     pub has_unseen_content: bool,
     pub hovered_index: Option<usize>,
     pub input_buffer: String,
-    /// Cached segment heights from last render (for hit testing)
-    pub segment_heights: Vec<u16>,
+    /// Cached layout measurements for rendering and hit testing
+    pub layout: LayoutCache,
 }
 
 impl TuiState {
@@ -41,7 +107,7 @@ impl TuiState {
             has_unseen_content: false,
             hovered_index: None,
             input_buffer: String::new(),
-            segment_heights: Vec::new(),
+            layout: LayoutCache::new(),
         }
     }
 }
@@ -96,7 +162,7 @@ pub fn run() -> std::io::Result<()> {
                         row,
                         frame_area,
                         scroll_offset,
-                        &tui.segment_heights,
+                        &tui.layout.prefix_heights,
                     );
                 }
 
