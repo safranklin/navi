@@ -1,4 +1,4 @@
-use crossterm::event::{self, Event, KeyCode, MouseEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyModifiers, MouseEventKind};
 
 /// TUI-specific input events
 pub enum TuiEvent {
@@ -12,6 +12,7 @@ pub enum TuiEvent {
     ScrollUp,
     ScrollDown,
     MouseMove(u16, u16),
+    CycleEffort, // Ctrl+T to cycle reasoning effort
 }
 
 /// Poll for an event with timeout (blocks up to 100ms)
@@ -28,13 +29,16 @@ fn poll_event_timeout(timeout: std::time::Duration) -> Option<TuiEvent> {
     if event::poll(timeout).unwrap() {
         match event::read().unwrap() {
             Event::Key(key_event) => {
-                match key_event.code {
-                    KeyCode::Char(c) => Some(TuiEvent::InputChar(c)),
-                    KeyCode::Backspace => Some(TuiEvent::Backspace),
-                    KeyCode::Enter => Some(TuiEvent::Submit),
-                    KeyCode::Esc => Some(TuiEvent::Quit),
-                    KeyCode::Up => Some(TuiEvent::ScrollUp),
-                    KeyCode::Down => Some(TuiEvent::ScrollDown),
+                match (key_event.modifiers, key_event.code) {
+                    // Ctrl+R cycles reasoning effort
+                    (KeyModifiers::CONTROL, KeyCode::Char('r')) => Some(TuiEvent::CycleEffort),
+                    // Regular key handling
+                    (_, KeyCode::Char(c)) => Some(TuiEvent::InputChar(c)),
+                    (_, KeyCode::Backspace) => Some(TuiEvent::Backspace),
+                    (_, KeyCode::Enter) => Some(TuiEvent::Submit),
+                    (_, KeyCode::Esc) => Some(TuiEvent::Quit),
+                    (_, KeyCode::Up) => Some(TuiEvent::ScrollUp),
+                    (_, KeyCode::Down) => Some(TuiEvent::ScrollDown),
                     _ => None,
                 }
             }

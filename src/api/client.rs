@@ -1,12 +1,13 @@
-use super::types::{ModelRequest, Context, ModelStreamResponse, Source, StreamChunk};
+use super::types::{Effort, ModelRequest, Context, ModelStreamResponse, ReasoningConfig, Source, StreamChunk};
 use std::env;
 use std::sync::mpsc::Sender;
 
 /// Streams chat completion chunks from the OpenRouter API.
 /// # Arguments
 /// * `context` - A reference to the Context containing the conversation history.
+/// * `effort` - The reasoning effort level to use for this request.
 /// * `sender` - A channel sender to transmit StreamChunk (Thinking or Content).
-pub async fn stream_completion(context: &Context, sender: Sender<StreamChunk>) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn stream_completion(context: &Context, effort: Effort, sender: Sender<StreamChunk>) -> Result<(), Box<dyn std::error::Error>> {
     // DESIGN DECISION: Filter out thinking (reasoning) segments from history when sending to API.
     // Why:
     // 1. Token Efficiency: Reasoning can easily generate a ton of tokens; omitting it saves significant context window and cost.
@@ -18,11 +19,21 @@ pub async fn stream_completion(context: &Context, sender: Sender<StreamChunk>) -
         .cloned()
         .collect();
 
+    // Build reasoning config based on effort level
+    let reasoning = if effort == Effort::None {
+        None // Don't include reasoning parameter when disabled
+    } else {
+        Some(ReasoningConfig {
+            effort: Some(effort),
+            exclude: None,
+        })
+    };
+
     let req = ModelRequest {
         model: env::var("PRIMARY_MODEL_NAME")?,
         messages: filtered_messages,
         stream: Some(true),
-        include_reasoning: Some(true),
+        reasoning,
     };
 
     let api_key = env::var("OPENROUTER_API_KEY")?;

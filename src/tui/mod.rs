@@ -205,6 +205,10 @@ pub fn run() -> std::io::Result<()> {
                         spawn_request(&app, tx.clone());
                     }
                 }
+                TuiEvent::CycleEffort => {
+                    app.effort = app.effort.next();
+                    app.status_message = format!("Reasoning: {}", app.effort.label());
+                }
             }
         }
         if should_quit {
@@ -229,14 +233,15 @@ pub fn run() -> std::io::Result<()> {
 
 fn spawn_request(app: &App, tx: mpsc::Sender<Action>) {
     let context = app.context.clone();
-    
+    let effort = app.effort;
+
     // Channel for the stream chunks (StreamChunk)
     let (str_tx, str_rx) = mpsc::channel();
-    
+
     // Spawn async task to drive the stream
     let tx_clone = tx.clone();
     tokio::spawn(async move {
-        if let Err(e) = stream_completion(&context, str_tx).await {
+        if let Err(e) = stream_completion(&context, effort, str_tx).await {
             let _ = tx_clone.send(Action::ResponseChunk(format!("\n[Error: {}]", e)));
             let _ = tx_clone.send(Action::ResponseDone);
         }

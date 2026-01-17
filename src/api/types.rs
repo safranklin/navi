@@ -108,6 +108,62 @@ impl Context {
     }
 }
 
+/// Effort level for reasoning tokens
+/// Higher effort = more reasoning tokens = better quality but higher cost
+#[derive(Serialize, Clone, Copy, Debug, Default, PartialEq)]
+pub enum Effort {
+    /// ~95% of max_tokens for reasoning - maximum depth
+    #[serde(rename = "xhigh")]
+    XHigh,
+    /// ~80% of max_tokens for reasoning - thorough analysis
+    #[serde(rename = "high")]
+    High,
+    /// ~50% of max_tokens for reasoning - balanced (default)
+    #[serde(rename = "medium")]
+    #[default]
+    Medium,
+    /// ~20% of max_tokens for reasoning - quick thinking
+    #[serde(rename = "low")]
+    Low,
+    /// Disables reasoning entirely
+    #[serde(rename = "none")]
+    None,
+}
+
+impl Effort {
+    /// Cycles to the next effort level (wraps around)
+    pub fn next(self) -> Effort {
+        match self {
+            Effort::None => Effort::Low,
+            Effort::Low => Effort::Medium,
+            Effort::Medium => Effort::High,
+            Effort::High => Effort::XHigh,
+            Effort::XHigh => Effort::None,
+        }
+    }
+
+    /// Returns a human-readable label for display
+    pub fn label(self) -> &'static str {
+        match self {
+            Effort::XHigh => "XHigh",
+            Effort::High => "High",
+            Effort::Medium => "Medium",
+            Effort::Low => "Low",
+            Effort::None => "Off",
+        }
+    }
+}
+
+/// Configuration for reasoning tokens in API requests
+#[derive(Serialize, Debug, Default)]
+pub struct ReasoningConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<Effort>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exclude: Option<bool>,
+}
+
 #[derive(Serialize, Debug)]
 pub struct ModelRequest {
     pub model: String,
@@ -115,7 +171,7 @@ pub struct ModelRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub include_reasoning: Option<bool>,
+    pub reasoning: Option<ReasoningConfig>,
 }
 
 #[derive(Debug)]
@@ -225,12 +281,31 @@ mod tests {
                 },
             ],
             stream: None,
-            include_reasoning: None,
+            reasoning: None,
         };
 
         let serialized = serde_json::to_string(&req).unwrap();
         let expected = r#"{"model":"test-model","messages":[{"role":"user","content":"hello"},{"role":"assistant","content":"hi there"}]}"#;
         assert_eq!(serialized, expected);
+    }
+
+    #[test]
+    fn test_reasoning_config_serialization() {
+        let config = ReasoningConfig {
+            effort: Some(Effort::High),
+            exclude: None,
+        };
+        let serialized = serde_json::to_string(&config).unwrap();
+        assert_eq!(serialized, r#"{"effort":"high"}"#);
+    }
+
+    #[test]
+    fn test_effort_cycle() {
+        assert_eq!(Effort::None.next(), Effort::Low);
+        assert_eq!(Effort::Low.next(), Effort::Medium);
+        assert_eq!(Effort::Medium.next(), Effort::High);
+        assert_eq!(Effort::High.next(), Effort::XHigh);
+        assert_eq!(Effort::XHigh.next(), Effort::None);
     }
 
     #[test]

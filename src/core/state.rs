@@ -9,13 +9,14 @@
 //! ├── status_message: String        // status bar text
 //! ├── model_name: String            // current model
 //! ├── is_loading: bool              // waiting for API
+//! ├── effort: Effort                // reasoning effort level
 //! └── error: Option<String>         // error message
 //! ```
 //!
 //! State changes only happen through `update(state, action)` in action.rs.
 //! This keeps things predictable, so no surprise mutations.
 
-use crate::api::Context;
+use crate::api::{Context, Effort};
 
 #[derive(Debug, PartialEq)]
 pub struct App {
@@ -23,6 +24,7 @@ pub struct App {
     pub status_message: String,
     pub model_name: String,
     pub is_loading: bool,
+    pub effort: Effort,
     pub error: Option<String>,
 }
 
@@ -33,6 +35,7 @@ impl App {
             status_message: String::from("Welcome to Navi!"),
             model_name,
             is_loading: false,
+            effort: Effort::default(),
             error: None,
         }
     }
