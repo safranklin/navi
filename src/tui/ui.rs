@@ -11,12 +11,21 @@ use tui_scrollview::{ScrollView, ScrollbarVisibility};
 
 struct RenderedSegment<'a> {
     paragraph: Paragraph<'a>,
-    height: u16,
+}
+
+/// Calculate segment height without building full Paragraph (for non-visible segments)
+fn calculate_segment_height(segment: &ModelSegment, content_width: u16) -> u16 {
+    let content = segment.content.trim();
+    let paragraph = Paragraph::new(content)
+        .block(Block::bordered())
+        .wrap(Wrap { trim: true });
+    let inner_width = content_width.saturating_sub(2);
+    paragraph.line_count(inner_width) as u16
 }
 
 impl<'a> RenderedSegment<'a> {
-    /// Create a rendered segment. If `cached_height` is provided, skip expensive line_count().
-    fn new(segment: &'a ModelSegment, window_area: Rect, is_hovered: bool, cached_height: Option<u16>) -> Self {
+    /// Create a rendered segment (paragraph only, height comes from cache)
+    fn new(segment: &'a ModelSegment, is_hovered: bool) -> Self {
         let role = format_role(&segment.source);
         let base_style = get_role_style(&segment.source);
 
@@ -39,13 +48,7 @@ impl<'a> RenderedSegment<'a> {
             .style(style)
             .wrap(Wrap { trim: true });
 
-        // Use cached height if available, otherwise compute (expensive)
-        let height = cached_height.unwrap_or_else(|| {
-            let inner_width = window_area.width.saturating_sub(2);
-            paragraph.line_count(inner_width) as u16
-        });
-
-        RenderedSegment { paragraph, height }
+        RenderedSegment { paragraph }
     }
 }
 
@@ -91,45 +94,56 @@ fn draw_context_area(frame: &mut Frame, area: Rect, app: &App, tui: &mut TuiStat
     let content_width = area.width.saturating_sub(1);
     let num_items = app.context.items.len();
 
-    // Check how many cached heights we can reuse
+    // Phase 1: Update heights for ALL segments (needed for total_height and visible range)
     let reusable = tui.layout.reusable_count(num_items, content_width, app.is_loading);
 
-    // Build segments, using cached heights where available
-    let segments: Vec<RenderedSegment> = app.context.items
-        .iter()
-        .enumerate()
-        .map(|(index, seg)| {
-            // Use cached height if this segment hasn't changed AND cache exists for it
-            let cached_height = if index < reusable && index < tui.layout.heights.len() {
-                Some(tui.layout.heights[index])
-            } else {
-                None
-            };
-
-            // Hover is active if: this is the hovered index AND NOT (last message while loading)
-            let is_last = index == num_items.saturating_sub(1);
-            let is_hovered = tui.hovered_index == Some(index) && !(is_last && app.is_loading);
-            RenderedSegment::new(seg, area, is_hovered, cached_height)
-        })
-        .collect();
-
-    // Update cache with all heights and prefix sums
-    tui.layout.heights = segments.iter().map(|s| s.height).collect();
+    // Ensure heights vec has correct size, calculating only what's needed
+    tui.layout.heights.truncate(reusable.min(tui.layout.heights.len()));
+    for (index, seg) in app.context.items.iter().enumerate().skip(tui.layout.heights.len()) {
+        let height = if index < reusable && index < tui.layout.heights.len() {
+            tui.layout.heights[index] // Use cached (shouldn't happen after truncate, but defensive)
+        } else {
+            calculate_segment_height(seg, content_width)
+        };
+        tui.layout.heights.push(height);
+    }
     tui.layout.rebuild_prefix_heights();
     tui.layout.update_metadata(num_items, content_width);
 
     let total_height: u16 = tui.layout.heights.iter().sum();
 
+    // Phase 2: Calculate visible range using prefix heights
+    let scroll_offset = tui.scroll_state.offset().y;
+    let visible_range = tui.layout.visible_range(scroll_offset, area.height);
+
+    // Phase 3: Build RenderedSegments ONLY for visible segments
+    let visible_segments: Vec<RenderedSegment> = visible_range.clone()
+        .map(|index| {
+            let seg = &app.context.items[index];
+            let is_last = index == num_items.saturating_sub(1);
+            let is_hovered = tui.hovered_index == Some(index) && !(is_last && app.is_loading);
+            RenderedSegment::new(seg, is_hovered)
+        })
+        .collect();
+
+    // Phase 4: Render only visible segments at their correct positions
     let mut scroll_view = ScrollView::new(Size::new(content_width, total_height))
         .vertical_scrollbar_visibility(ScrollbarVisibility::Always)
         .horizontal_scrollbar_visibility(ScrollbarVisibility::Never);
 
-    // Render all segments
-    let mut y_offset: u16 = 0;
-    for segment in &segments {
-        let segment_rect = Rect::new(0, y_offset, content_width, segment.height);
+    // Calculate starting y_offset for first visible segment
+    let mut y_offset: u16 = if visible_range.start > 0 {
+        tui.layout.prefix_heights[visible_range.start - 1]
+    } else {
+        0
+    };
+
+    for (i, segment) in visible_segments.iter().enumerate() {
+        let index = visible_range.start + i;
+        let height = tui.layout.heights[index];
+        let segment_rect = Rect::new(0, y_offset, content_width, height);
         scroll_view.render_widget(segment.paragraph.clone(), segment_rect);
-        y_offset += segment.height;
+        y_offset += height;
     }
 
     frame.render_stateful_widget(scroll_view, area, &mut tui.scroll_state);
@@ -225,30 +239,28 @@ mod tests {
     }
 
     #[test]
-    fn test_rendered_segment_height_includes_borders() {
+    fn test_segment_height_includes_borders() {
         let segment = ModelSegment {
             source: Source::User,
             content: "Single line".to_string(),
         };
-        let area = Rect { x: 0, y: 0, width: 80, height: 100 };
 
-        let rendered = RenderedSegment::new(&segment, area, false, None);
+        let height = calculate_segment_height(&segment, 80);
 
         // 1 line of content + 2 for borders = 3
-        assert_eq!(rendered.height, 3);
+        assert_eq!(height, 3);
     }
 
     #[test]
-    fn test_rendered_segment_trims_content() {
+    fn test_segment_height_trims_content() {
         let segment = ModelSegment {
             source: Source::Model,
             content: "\n\n   Trim me   \n\n".to_string(),
         };
-        let area = Rect { x: 0, y: 0, width: 80, height: 100 };
 
-        let rendered = RenderedSegment::new(&segment, area, false, None);
+        let height = calculate_segment_height(&segment, 80);
 
         // "Trim me" is 1 line. + 2 for borders = 3.
-        assert_eq!(rendered.height, 3);
+        assert_eq!(height, 3);
     }
 }

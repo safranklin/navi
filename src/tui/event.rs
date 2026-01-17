@@ -14,8 +14,18 @@ pub enum TuiEvent {
     MouseMove(u16, u16),
 }
 
+/// Poll for an event with timeout (blocks up to 100ms)
 pub fn poll_event() -> Option<TuiEvent> {
-    if event::poll(std::time::Duration::from_millis(100)).unwrap() {
+    poll_event_timeout(std::time::Duration::from_millis(100))
+}
+
+/// Poll for an event without blocking (returns immediately)
+pub fn poll_event_immediate() -> Option<TuiEvent> {
+    poll_event_timeout(std::time::Duration::ZERO)
+}
+
+fn poll_event_timeout(timeout: std::time::Duration) -> Option<TuiEvent> {
+    if event::poll(timeout).unwrap() {
         match event::read().unwrap() {
             Event::Key(key_event) => {
                 match key_event.code {

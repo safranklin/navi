@@ -18,7 +18,7 @@ use tui_scrollview::ScrollViewState;
 
 use crate::core::action::{Action, update, Effect};
 use crate::core::state::App;
-use crate::tui::event::{poll_event, TuiEvent};
+use crate::tui::event::{poll_event, poll_event_immediate, TuiEvent};
 
 use std::sync::mpsc;
 use crate::api::client::stream_completion;
@@ -88,6 +88,22 @@ impl LayoutCache {
             Some(*acc) // yield current total
         }).collect::<Vec<u16>>()
     }
+
+    /// Calculate which segments are visible in the viewport (with buffer for smooth scrolling).
+    /// Returns a Range of segment indices that should be rendered.
+    pub fn visible_range(&self, scroll_offset: u16, viewport_height: u16) -> std::ops::Range<usize> {
+        // Add buffer zone (0.5x viewport on each side = 2x total render area)
+        // This handles partial visibility at boundaries and improves scroll smoothness
+        let buffer = viewport_height / 2;
+
+        let buffered_start = scroll_offset.saturating_sub(buffer);
+        let buffered_end = scroll_offset.saturating_add(viewport_height).saturating_add(buffer);
+
+        let start = self.prefix_heights.partition_point(|&end| end <= buffered_start);
+        let end = self.prefix_heights.partition_point(|&end| end < buffered_end);
+
+        start..end
+    }
 }
 
 /// TUI-specific presentation state (not part of core business logic)
@@ -139,8 +155,13 @@ pub fn run() -> std::io::Result<()> {
     loop {
         terminal.draw(|f| ui::draw_ui(f, &app, &mut tui))?;
 
-        // Handle user input
-        if let Some(event) = poll_event() {
+        // Wait for first event (with timeout for background task responsiveness)
+        let first_event = poll_event();
+
+        // Process first event + drain ALL pending events before next draw
+        // This batches rapid input (like paste) into a single redraw
+        let mut should_quit = false;
+        for event in first_event.into_iter().chain(std::iter::from_fn(poll_event_immediate)) {
             match event {
                 // TUI-local events - modify TuiState directly
                 TuiEvent::InputChar(c) => {
@@ -170,10 +191,14 @@ pub fn run() -> std::io::Result<()> {
                 TuiEvent::Quit => {
                     let effect = update(&mut app, Action::Quit);
                     if effect == Effect::Quit {
-                        break;
+                        should_quit = true;
                     }
                 }
                 TuiEvent::Submit => {
+                    // Don't allow submitting while a response is streaming
+                    if app.is_loading {
+                        continue;
+                    }
                     let message = std::mem::take(&mut tui.input_buffer);
                     let effect = update(&mut app, Action::Submit(message));
                     if effect == Effect::SpawnRequest {
@@ -181,6 +206,9 @@ pub fn run() -> std::io::Result<()> {
                     }
                 }
             }
+        }
+        if should_quit {
+            break;
         }
 
         // Handle background task actions (streaming responses)
