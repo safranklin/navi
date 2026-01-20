@@ -1,4 +1,5 @@
 use super::types::{Effort, ModelRequest, Context, ModelStreamResponse, ReasoningConfig, Source, StreamChunk};
+use log::{debug, info, warn};
 use std::env;
 use std::sync::mpsc::Sender;
 
@@ -29,12 +30,20 @@ pub async fn stream_completion(context: &Context, effort: Effort, sender: Sender
         })
     };
 
+    let model_name = env::var("PRIMARY_MODEL_NAME")?;
     let req = ModelRequest {
-        model: env::var("PRIMARY_MODEL_NAME")?,
-        messages: filtered_messages,
+        model: model_name.clone(),
+        messages: filtered_messages.clone(),
         stream: Some(true),
         reasoning,
     };
+
+    info!(
+        "API request: model={}, messages={}, effort={:?}",
+        model_name,
+        filtered_messages.len(),
+        effort
+    );
 
     let api_key = env::var("OPENROUTER_API_KEY")?;
     let client = reqwest::Client::new();
@@ -45,16 +54,22 @@ pub async fn stream_completion(context: &Context, effort: Effort, sender: Sender
         .send()
         .await?;
 
+    debug!("API response status: {}", response.status());
+
     if !response.status().is_success() {
         let status = response.status();
         let err_body = response.text().await?;
+        warn!("API error: {} - {}", status, err_body);
         return Err(format!("API Error: {} - {}", status, err_body).into());
     }
 
     let mut buffer = String::new();
+    let mut total_content_len = 0usize;
+    let mut chunk_count = 0usize;
 
     while let Some(chunk) = response.chunk().await? {
         let s = String::from_utf8_lossy(&chunk);
+        debug!("Raw chunk received: {} bytes", chunk.len());
         buffer.push_str(&s);
 
         while let Some(pos) = buffer.find('\n') {
@@ -65,16 +80,23 @@ pub async fn stream_completion(context: &Context, effort: Effort, sender: Sender
             if line.starts_with("data: ") {
                 let data = &line[6..];
                 if data == "[DONE]" {
+                    info!(
+                        "Stream complete: [DONE] received, {} chunks, {} total content bytes",
+                        chunk_count, total_content_len
+                    );
                     break; // Exit the inner loop
                 }
-                
+
                 // Parse JSON
                 if let Ok(stream_resp) = serde_json::from_str::<ModelStreamResponse>(data) {
                     if let Some(choice) = stream_resp.choices.first() {
                         // Handle reasoning if present
                         if let Some(reasoning) = &choice.delta.reasoning {
                             if !reasoning.is_empty() {
+                                chunk_count += 1;
+                                debug!("Sending StreamChunk::Thinking (len={})", reasoning.len());
                                 if sender.send(StreamChunk::Thinking(reasoning.clone())).is_err() {
+                                    warn!("Thinking chunk send failed: receiver dropped");
                                     return Ok(());
                                 }
                             }
@@ -82,7 +104,11 @@ pub async fn stream_completion(context: &Context, effort: Effort, sender: Sender
                         // Handle content if present
                         if let Some(content) = &choice.delta.content {
                             if !content.is_empty() {
+                                chunk_count += 1;
+                                total_content_len += content.len();
+                                debug!("Sending StreamChunk::Content (len={}, total={})", content.len(), total_content_len);
                                 if sender.send(StreamChunk::Content(content.clone())).is_err() {
+                                    warn!("Content chunk send failed: receiver dropped");
                                     return Ok(()); // Receiver dropped
                                 }
                             }
@@ -93,5 +119,6 @@ pub async fn stream_completion(context: &Context, effort: Effort, sender: Sender
         }
     }
 
+    info!("Stream ended: {} chunks processed, {} total content bytes", chunk_count, total_content_len);
     Ok(())
 }

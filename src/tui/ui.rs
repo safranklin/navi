@@ -98,14 +98,10 @@ fn draw_context_area(frame: &mut Frame, area: Rect, app: &App, tui: &mut TuiStat
     let reusable = tui.layout.reusable_count(num_items, content_width, app.is_loading);
 
     // Ensure heights vec has correct size, calculating only what's needed
+    // After truncate, we skip already-cached heights and calculate only new ones
     tui.layout.heights.truncate(reusable.min(tui.layout.heights.len()));
-    for (index, seg) in app.context.items.iter().enumerate().skip(tui.layout.heights.len()) {
-        let height = if index < reusable && index < tui.layout.heights.len() {
-            tui.layout.heights[index] // Use cached (shouldn't happen after truncate, but defensive)
-        } else {
-            calculate_segment_height(seg, content_width)
-        };
-        tui.layout.heights.push(height);
+    for seg in app.context.items.iter().skip(tui.layout.heights.len()) {
+        tui.layout.heights.push(calculate_segment_height(seg, content_width));
     }
     tui.layout.rebuild_prefix_heights();
     tui.layout.update_metadata(num_items, content_width);

@@ -13,8 +13,10 @@
 //! This makes everything testable: `assert_eq!(update(state, action), expected)`.
 //! And debuggable: log every action, replay the exact session.
 
+use log::debug;
 use crate::core::state::App;
 
+#[derive(Debug)]
 pub enum Action {
     // Quit the application
     Quit,
@@ -52,15 +54,24 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
         }
         Action::ResponseChunk(chunk) => {
             app_state.context.append_to_last_model_message(&chunk);
+            // Log total message length after append
+            if let Some(last) = app_state.context.items.last() {
+                debug!("ResponseChunk applied: chunk_len={}, total_msg_len={}", chunk.len(), last.content.len());
+            }
             app_state.status_message = String::from("Receiving...");
             Effect::Render
         }
         Action::ThinkingChunk(chunk) => {
             app_state.context.append_to_last_thinking_message(&chunk);
+            debug!("ThinkingChunk applied: chunk_len={}", chunk.len());
             app_state.status_message = String::from("Thinking...");
             Effect::Render
         }
         Action::ResponseDone => {
+            // Log final message length
+            if let Some(last) = app_state.context.items.last() {
+                debug!("ResponseDone: final message length={}", last.content.len());
+            }
             app_state.is_loading = false;
             app_state.status_message = String::from("Response complete.");
             Effect::Render

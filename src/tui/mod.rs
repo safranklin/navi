@@ -10,6 +10,7 @@
 mod event;
 mod ui;
 
+use log::{debug, info};
 use std::env;
 use std::io::stdout;
 use crossterm::execute;
@@ -100,7 +101,12 @@ impl LayoutCache {
         let buffered_end = scroll_offset.saturating_add(viewport_height).saturating_add(buffer);
 
         let start = self.prefix_heights.partition_point(|&end| end <= buffered_start);
-        let end = self.prefix_heights.partition_point(|&end| end < buffered_end);
+        // Find items whose START is < buffered_end (not just END < buffered_end)
+        // prefix_heights[i] = end of item i = start of item i+1
+        // So we add 1 to include items that start before buffered_end but end after
+        let end = self.prefix_heights.partition_point(|&end| end < buffered_end)
+            .saturating_add(1)
+            .min(self.prefix_heights.len());
 
         start..end
     }
@@ -217,6 +223,7 @@ pub fn run() -> std::io::Result<()> {
 
         // Handle background task actions (streaming responses)
         while let Ok(action) = rx.try_recv() {
+            debug!("Event loop received: {:?}", action);
             let effect = update(&mut app, action);
             match effect {
                 Effect::Quit => break,
@@ -232,34 +239,45 @@ pub fn run() -> std::io::Result<()> {
 }
 
 fn spawn_request(app: &App, tx: mpsc::Sender<Action>) {
+    info!("Spawning API request");
     let context = app.context.clone();
     let effort = app.effort;
 
     // Channel for the stream chunks (StreamChunk)
     let (str_tx, str_rx) = mpsc::channel();
 
+    // Clone tx for error handling before moving tx into forwarding task
+    let tx_error = tx.clone();
+    let tx_forward = tx;
+
     // Spawn async task to drive the stream
-    let tx_clone = tx.clone();
+    // Note: We don't send ResponseDone here on error - the blocking task below
+    // always sends ResponseDone when the channel closes, avoiding duplicates.
     tokio::spawn(async move {
         if let Err(e) = stream_completion(&context, effort, str_tx).await {
-            let _ = tx_clone.send(Action::ResponseChunk(format!("\n[Error: {}]", e)));
-            let _ = tx_clone.send(Action::ResponseDone);
+            info!("Stream error: {}", e);
+            // Send error as a content chunk; ResponseDone is sent by forwarding task
+            let _ = tx_error.send(Action::ResponseChunk(format!("\n[Error: {}]", e)));
         }
     });
-    
-    // Spawn blocking task to forward chunks as Actions
-    let tx_forward = tx.clone();
     tokio::task::spawn_blocking(move || {
+        let mut forwarded_count = 0usize;
+        let mut total_content_len = 0usize;
         while let Ok(chunk) = str_rx.recv() {
+            forwarded_count += 1;
             match chunk {
                 StreamChunk::Content(c) => {
+                    total_content_len += c.len();
+                    debug!("Forwarding Action::ResponseChunk (len={}, total={})", c.len(), total_content_len);
                     let _ = tx_forward.send(Action::ResponseChunk(c));
                 }
                 StreamChunk::Thinking(t) => {
+                    debug!("Forwarding Action::ThinkingChunk (len={})", t.len());
                     let _ = tx_forward.send(Action::ThinkingChunk(t));
                 }
             }
         }
+        info!("Forwarding complete: {} actions, {} content bytes", forwarded_count, total_content_len);
         let _ = tx_forward.send(Action::ResponseDone);
-    }); 
+    });
 }
