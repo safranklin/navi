@@ -120,6 +120,8 @@ pub struct TuiState {
     pub input_buffer: String,
     /// Cached layout measurements for rendering and hit testing
     pub layout: LayoutCache,
+    /// When true, auto-scroll to bottom on new content (chat-style behavior)
+    pub stick_to_bottom: bool,
 }
 
 impl TuiState {
@@ -130,6 +132,7 @@ impl TuiState {
             hovered_index: None,
             input_buffer: String::new(),
             layout: LayoutCache::new(),
+            stick_to_bottom: true, // Start at bottom
         }
     }
 }
@@ -178,9 +181,22 @@ pub fn run() -> std::io::Result<()> {
                 }
                 TuiEvent::ScrollUp => {
                     tui.scroll_state.scroll_up();
+                    tui.stick_to_bottom = false; // User scrolled up, disable auto-scroll
                 }
                 TuiEvent::ScrollDown => {
                     tui.scroll_state.scroll_down();
+                    // Don't re-enable stick_to_bottom here; user must press End
+                }
+                TuiEvent::ScrollPageUp => {
+                    tui.scroll_state.scroll_page_up();
+                    tui.stick_to_bottom = false;
+                }
+                TuiEvent::ScrollPageDown => {
+                    tui.scroll_state.scroll_page_down();
+                }
+                TuiEvent::ScrollToBottom => {
+                    tui.scroll_state.scroll_to_bottom();
+                    tui.stick_to_bottom = true; // Re-enable auto-scroll
                 }
                 TuiEvent::MouseMove(_col, row) => {
                     let frame_area = terminal.get_frame().area();

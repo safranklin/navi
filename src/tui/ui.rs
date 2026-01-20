@@ -142,6 +142,11 @@ fn draw_context_area(frame: &mut Frame, area: Rect, app: &App, tui: &mut TuiStat
         y_offset += height;
     }
 
+    // Auto-scroll to bottom if stick_to_bottom is enabled (chat-style behavior)
+    if tui.stick_to_bottom {
+        tui.scroll_state.scroll_to_bottom();
+    }
+
     frame.render_stateful_widget(scroll_view, area, &mut tui.scroll_state);
 
     // Update unseen content indicator
@@ -258,5 +263,34 @@ mod tests {
 
         // "Trim me" is 1 line. + 2 for borders = 3.
         assert_eq!(height, 3);
+    }
+
+    #[test]
+    fn test_segment_height_wrapping() {
+        // Test that long lines wrap correctly
+        let long_content = "word ".repeat(50); // 250 chars
+        let segment = ModelSegment {
+            source: Source::Model,
+            content: long_content,
+        };
+
+        // At width 40 (inner 38), "word " (5 chars) fits ~7 per line
+        // 250 chars / 38 ≈ 7 lines + borders
+        let height = calculate_segment_height(&segment, 40);
+        assert!(height > 3, "Long content should wrap to multiple lines, got {}", height);
+    }
+
+    #[test]
+    fn test_segment_height_explicit_newlines() {
+        // Test content with explicit newlines
+        let segment = ModelSegment {
+            source: Source::User,
+            content: "Line 1\nLine 2\nLine 3".to_string(),
+        };
+
+        let height = calculate_segment_height(&segment, 80);
+
+        // 3 lines of content + 2 for borders = 5
+        assert_eq!(height, 5);
     }
 }

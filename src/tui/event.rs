@@ -11,8 +11,11 @@ pub enum TuiEvent {
     Backspace,
     ScrollUp,
     ScrollDown,
+    ScrollPageUp,
+    ScrollPageDown,
+    ScrollToBottom, // End key - also re-enables stick-to-bottom
     MouseMove(u16, u16),
-    CycleEffort, // Ctrl+T to cycle reasoning effort
+    CycleEffort, // Ctrl+R to cycle reasoning effort
 }
 
 /// Poll for an event with timeout (blocks up to 100ms)
@@ -39,6 +42,9 @@ fn poll_event_timeout(timeout: std::time::Duration) -> Option<TuiEvent> {
                     (_, KeyCode::Esc) => Some(TuiEvent::Quit),
                     (_, KeyCode::Up) => Some(TuiEvent::ScrollUp),
                     (_, KeyCode::Down) => Some(TuiEvent::ScrollDown),
+                    (_, KeyCode::PageUp) => Some(TuiEvent::ScrollPageUp),
+                    (_, KeyCode::PageDown) => Some(TuiEvent::ScrollPageDown),
+                    (_, KeyCode::End) => Some(TuiEvent::ScrollToBottom),
                     _ => None,
                 }
             }
