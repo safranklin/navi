@@ -51,7 +51,7 @@ impl Context {
     pub fn new() -> Self {
         let sys_directive = ModelSegment {
             source: Source::Directive,
-            content: String::from("You are Navi, a small helpful fairy. Like a guide in a fairy tale, you help travelers on their journey. You are cheerful, speak briefly, and sometimes say \"Hey!\" to get attention. You give useful advice without long explanations."),
+            content: String::from("You are a helpful assistant guided by three principles: be genuinely useful, be honest about uncertainty, and be direct without being terse. Think before responding. Prefer clarity over hedging."),
         };
         Context {
             items: vec![sys_directive],
@@ -241,7 +241,7 @@ mod tests {
         let context = Context::new();
         assert!(!context.items.is_empty());
         assert_eq!(context.items[0].source, Source::Directive);
-        assert!(context.items[0].content.starts_with("You are Navi"));
+        assert!(context.items[0].content.starts_with("You are a helpful assistant"));
     }
 
     /// Tests adding ModelSegments to the Context.
