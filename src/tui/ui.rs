@@ -1,4 +1,4 @@
-use crate::api::{Source, ModelSegment};
+use crate::inference::{ContextSegment, Source};
 use crate::core::state::App;
 use crate::tui::TuiState;
 
@@ -14,7 +14,7 @@ struct RenderedSegment<'a> {
 }
 
 /// Calculate segment height without building full Paragraph (for non-visible segments)
-fn calculate_segment_height(segment: &ModelSegment, content_width: u16) -> u16 {
+fn calculate_segment_height(segment: &ContextSegment, content_width: u16) -> u16 {
     let content = segment.content.trim();
     let paragraph = Paragraph::new(content)
         .block(Block::bordered())
@@ -25,7 +25,7 @@ fn calculate_segment_height(segment: &ModelSegment, content_width: u16) -> u16 {
 
 impl<'a> RenderedSegment<'a> {
     /// Create a rendered segment (paragraph only, height comes from cache)
-    fn new(segment: &'a ModelSegment, is_hovered: bool) -> Self {
+    fn new(segment: &'a ContextSegment, is_hovered: bool) -> Self {
         let role = format_role(&segment.source);
         let base_style = get_role_style(&segment.source);
 
@@ -217,6 +217,7 @@ mod tests {
     use super::*;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+    use crate::test_support::test_app;
 
     #[test]
     fn test_format_role() {
@@ -230,7 +231,7 @@ mod tests {
     fn test_draw_ui() {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).unwrap();
-        let app = App::new("test-model".to_string());
+        let app = test_app();
         let mut tui = TuiState::new();
         terminal
             .draw(|f| {
@@ -241,7 +242,7 @@ mod tests {
 
     #[test]
     fn test_segment_height_includes_borders() {
-        let segment = ModelSegment {
+        let segment = ContextSegment {
             source: Source::User,
             content: "Single line".to_string(),
         };
@@ -254,7 +255,7 @@ mod tests {
 
     #[test]
     fn test_segment_height_trims_content() {
-        let segment = ModelSegment {
+        let segment = ContextSegment {
             source: Source::Model,
             content: "\n\n   Trim me   \n\n".to_string(),
         };
@@ -269,7 +270,7 @@ mod tests {
     fn test_segment_height_wrapping() {
         // Test that long lines wrap correctly
         let long_content = "word ".repeat(50); // 250 chars
-        let segment = ModelSegment {
+        let segment = ContextSegment {
             source: Source::Model,
             content: long_content,
         };
@@ -283,7 +284,7 @@ mod tests {
     #[test]
     fn test_segment_height_explicit_newlines() {
         // Test content with explicit newlines
-        let segment = ModelSegment {
+        let segment = ContextSegment {
             source: Source::User,
             content: "Line 1\nLine 2\nLine 3".to_string(),
         };

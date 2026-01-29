@@ -1,5 +1,8 @@
 mod api;
 mod core;
+mod inference;
+#[cfg(test)]
+mod test_support;
 mod tui;
 
 use simplelog::{ConfigBuilder, LevelFilter, WriteLogger};

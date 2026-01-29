@@ -5,6 +5,7 @@
 //!
 //! ```text
 //! App
+//! ├── provider: Arc<dyn CompletionProvider>  // LLM provider
 //! ├── context: Context              // conversation history
 //! ├── status_message: String        // status bar text
 //! ├── model_name: String            // current model
@@ -16,10 +17,11 @@
 //! State changes only happen through `update(state, action)` in action.rs.
 //! This keeps things predictable, so no surprise mutations.
 
-use crate::api::{Context, Effort};
+use std::sync::Arc;
+use crate::inference::{CompletionProvider, Context, Effort};
 
-#[derive(Debug, PartialEq)]
 pub struct App {
+    pub provider: Arc<dyn CompletionProvider>,
     pub context: Context,
     pub status_message: String,
     pub model_name: String,
@@ -29,8 +31,9 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(model_name: String) -> Self {
+    pub fn new(provider: Arc<dyn CompletionProvider>, model_name: String) -> Self {
         Self {
+            provider,
             context: Context::new(),
             status_message: String::from("Welcome to Navi!"),
             model_name,
@@ -41,10 +44,15 @@ impl App {
     }
 }
 
-#[test]
-fn test_app_new_defaults() {
-    let app = App::new("model".to_string());
-    assert_eq!(app.status_message, "Welcome to Navi!");
-    assert!(!app.is_loading);
-    assert_eq!(app.model_name, "model");
+#[cfg(test)]
+mod tests {
+    use crate::test_support::test_app;
+
+    #[test]
+    fn test_app_new_defaults() {
+        let app = test_app();
+        assert_eq!(app.status_message, "Welcome to Navi!");
+        assert!(!app.is_loading);
+        assert_eq!(app.model_name, "test-model");
+    }
 }

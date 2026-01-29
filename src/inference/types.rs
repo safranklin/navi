@@ -13,18 +13,18 @@ pub enum Source {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-pub struct ModelSegment {
+pub struct ContextSegment {
     #[serde(rename = "role")]
     pub source: Source,
     pub content: String,
 }
 
-impl ModelSegment {
-    /// Returns a new ModelSegment with normalized content.
+impl ContextSegment {
+    /// Returns a new ContextSegment with normalized content.
     /// Replaces typographic characters with ASCII equivalents.
     #[cfg(test)]
-    pub fn normalized(&self) -> ModelSegment {
-        ModelSegment {
+    pub fn normalized(&self) -> ContextSegment {
+        ContextSegment {
             source: self.source.clone(),
             content: replace_typography(&self.content).trim().to_string(),
         }
@@ -39,17 +39,17 @@ fn replace_typography(text: &str) -> String {
         .replace('…', "...") // Ellipsis
 }
 
-/// Represents the model input context, holding a collection of ModelSegments.
+/// Represents the model input context, holding a collection of ContextSegments.
 #[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct Context {
-    /// Collection of ModelSegments representing the model input in its entirety.
-    pub items: Vec<ModelSegment>,
+    /// Collection of ContextSegments representing the model input in its entirety.
+    pub items: Vec<ContextSegment>,
 }
 
 impl Context {
     /// Creates a new Context with the default system directive.
     pub fn new() -> Self {
-        let sys_directive = ModelSegment {
+        let sys_directive = ContextSegment {
             source: Source::Directive,
             content: String::from("You are a helpful assistant guided by three principles: be genuinely useful, be honest about uncertainty, and be direct without being terse. Think before responding. Prefer clarity over hedging."),
         };
@@ -57,13 +57,13 @@ impl Context {
             items: vec![sys_directive],
         }
     }
-    /// Adds a new ModelSegment to the context and returns a reference to the newly added segment.
-    pub fn add(&mut self, segment: ModelSegment) -> &ModelSegment {
+    /// Adds a new ContextSegment to the context and returns a reference to the newly added segment.
+    pub fn add(&mut self, segment: ContextSegment) -> &ContextSegment {
         self.items.push(segment);
         self.items.last().expect("just added an element to the context so it must exist")
     }
-    pub fn add_user_message(&mut self, content: String) -> &ModelSegment {
-        let segment = ModelSegment {
+    pub fn add_user_message(&mut self, content: String) -> &ContextSegment {
+        let segment = ContextSegment {
             source: Source::User,
             content,
         };
@@ -83,7 +83,7 @@ impl Context {
         }
         
         // If we get here, either no items or last item is not model
-        self.add(ModelSegment {
+        self.add(ContextSegment {
             source: Source::Model,
             content: normalized,
         });
@@ -101,7 +101,7 @@ impl Context {
             }
         }
         
-        self.add(ModelSegment {
+        self.add(ContextSegment {
             source: Source::Thinking,
             content: normalized,
         });
@@ -154,50 +154,11 @@ impl Effort {
     }
 }
 
-/// Configuration for reasoning tokens in API requests
-#[derive(Serialize, Debug, Default)]
-pub struct ReasoningConfig {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub effort: Option<Effort>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub exclude: Option<bool>,
-}
-
-#[derive(Serialize, Debug)]
-pub struct ModelRequest {
-    pub model: String,
-    pub messages: Vec<ModelSegment>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stream: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reasoning: Option<ReasoningConfig>,
-}
-
+/// Represents a chunk of streamed content from the model.
 #[derive(Debug)]
 pub enum StreamChunk {
     Content(String),
     Thinking(String),
-}
-
-// ModelResponse and Choice removed
-
-/// Represents the streaming response from the Model API
-#[derive(Deserialize, Debug)]
-pub struct ModelStreamResponse {
-    pub choices: Vec<StreamChoice>,
-}
-
-#[derive(Deserialize, Debug)]
-pub struct StreamChoice {
-    pub delta: Delta,
-}
-
-#[derive(Deserialize, Debug)]
-pub struct Delta {
-    pub content: Option<String>,
-    pub reasoning: Option<String>,
-    pub _role: Option<String>,
 }
 
 #[cfg(test)]
@@ -214,7 +175,7 @@ mod tests {
             $(
                 #[test]
                 fn $name() {
-                    let segment = ModelSegment {
+                    let segment = ContextSegment {
                         source: Source::User,
                         content: $input.to_string(),
                     };
@@ -244,19 +205,19 @@ mod tests {
         assert!(context.items[0].content.starts_with("You are a helpful assistant"));
     }
 
-    /// Tests adding ModelSegments to the Context.
+    /// Tests adding ContextSegments to the Context.
     #[test]
     fn test_context_add() {
         let mut ctx = Context::new();
-        let segment = ModelSegment {
+        let segment = ContextSegment {
             source: Source::User,
             content: "test".to_string(),
         };
         let added = ctx.add(segment);
-        // When a ModelSegment is added, it a reference to it shouild be added and the length of items should increase.
+        // When a ContextSegment is added, it a reference to it shouild be added and the length of items should increase.
         assert_eq!(added.content, "test");
         assert_eq!(ctx.items.len(), 2);
-        ctx.add(ModelSegment {
+        ctx.add(ContextSegment {
             source: Source::Model,
             content: "response".to_string(),
         });
@@ -265,40 +226,6 @@ mod tests {
         assert_eq!(ctx.items[2].content, "response");
     }
     
-    /// This is a contract test to ensure that the ModelRequest serializes correctly to JSON.
-    #[test]
-    fn test_model_request_serialization() {
-        let req = ModelRequest {
-            model: "test-model".to_string(),
-            messages: vec![
-                ModelSegment {
-                    source: Source::User,
-                    content: "hello".to_string(),
-                },
-                ModelSegment {
-                    source: Source::Model,
-                    content: "hi there".to_string(),
-                },
-            ],
-            stream: None,
-            reasoning: None,
-        };
-
-        let serialized = serde_json::to_string(&req).unwrap();
-        let expected = r#"{"model":"test-model","messages":[{"role":"user","content":"hello"},{"role":"assistant","content":"hi there"}]}"#;
-        assert_eq!(serialized, expected);
-    }
-
-    #[test]
-    fn test_reasoning_config_serialization() {
-        let config = ReasoningConfig {
-            effort: Some(Effort::High),
-            exclude: None,
-        };
-        let serialized = serde_json::to_string(&config).unwrap();
-        assert_eq!(serialized, r#"{"effort":"high"}"#);
-    }
-
     #[test]
     fn test_effort_cycle() {
         assert_eq!(Effort::None.next(), Effort::Low);

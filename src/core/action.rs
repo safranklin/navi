@@ -83,10 +83,12 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::inference::Source;
+    use crate::test_support::test_app;
 
     #[test]
     fn test_quit_returns_quit_effect() {
-        let mut app = App::new("test-model".to_string());
+        let mut app = test_app();
 
         let effect = update(&mut app, Action::Quit);
 
@@ -95,7 +97,7 @@ mod tests {
 
     #[test]
     fn test_submit_noop_on_empty_message() {
-        let mut app = App::new("test-model".to_string());
+        let mut app = test_app();
         let initial_context_len = app.context.items.len();
 
         let effect = update(&mut app, Action::Submit(String::new()));
@@ -107,7 +109,7 @@ mod tests {
 
     #[test]
     fn test_submit_adds_message_and_triggers_request() {
-        let mut app = App::new("test-model".to_string());
+        let mut app = test_app();
 
         let effect = update(&mut app, Action::Submit("Hello, model!".to_string()));
 
@@ -119,14 +121,14 @@ mod tests {
 
     #[test]
     fn test_response_chunk_appends_and_updates_status() {
-        let mut app = App::new("test-model".to_string());
+        let mut app = test_app();
         app.is_loading = true;
 
         let effect = update(&mut app, Action::ResponseChunk("Response ".to_string()));
 
         assert_eq!(app.context.items.len(), 2); // System + Model (new)
         assert_eq!(app.context.items[1].content, "Response ");
-        assert_eq!(app.context.items[1].source, crate::api::types::Source::Model);
+        assert_eq!(app.context.items[1].source, Source::Model);
         assert!(app.is_loading);
         assert_eq!(app.status_message, "Receiving...");
         assert_eq!(effect, Effect::Render);
@@ -134,7 +136,7 @@ mod tests {
 
     #[test]
     fn test_response_done_stops_loading() {
-        let mut app = App::new("test-model".to_string());
+        let mut app = test_app();
         app.is_loading = true;
 
         let effect = update(&mut app, Action::ResponseDone);

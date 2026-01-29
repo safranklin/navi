@@ -1,5 +1,7 @@
 pub mod provider;
+pub mod providers;
 pub mod types;
 
 pub use provider::{CompletionProvider, CompletionRequest, ProviderError};
-pub use types::{Context, Effort, ModelSegment, Source, StreamChunk};
+pub use providers::OpenRouterProvider;
+pub use types::{Context, ContextSegment, Effort, Source, StreamChunk};

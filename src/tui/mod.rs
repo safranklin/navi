@@ -13,17 +13,15 @@ mod ui;
 use log::{debug, info};
 use std::env;
 use std::io::stdout;
+use std::sync::{mpsc, Arc};
 use crossterm::execute;
 use crossterm::event::{EnableMouseCapture, DisableMouseCapture};
 use tui_scrollview::ScrollViewState;
 
 use crate::core::action::{Action, update, Effect};
 use crate::core::state::App;
+use crate::inference::{CompletionRequest, OpenRouterProvider, StreamChunk};
 use crate::tui::event::{poll_event, poll_event_immediate, TuiEvent};
-
-use std::sync::mpsc;
-use crate::api::client::stream_completion;
-use crate::api::types::StreamChunk;
 
 /// Cached layout measurements for efficient rendering and hit testing
 pub struct LayoutCache {
@@ -153,7 +151,12 @@ impl Drop for MouseCaptureGuard {
 }
 
 pub fn run() -> std::io::Result<()> {
-    let mut app = App::new(env::var("PRIMARY_MODEL_NAME").expect("PRIMARY_MODEL_NAME must be set"));
+    // Create the LLM provider
+    let api_key = env::var("OPENROUTER_API_KEY").expect("OPENROUTER_API_KEY must be set");
+    let provider = Arc::new(OpenRouterProvider::new(api_key, None));
+
+    let model_name = env::var("PRIMARY_MODEL_NAME").expect("PRIMARY_MODEL_NAME must be set");
+    let mut app = App::new(provider, model_name);
     let mut tui = TuiState::new();
     let mut terminal = ratatui::init();
     let _mouse_capture_guard = MouseCaptureGuard::new();
@@ -256,44 +259,54 @@ pub fn run() -> std::io::Result<()> {
 
 fn spawn_request(app: &App, tx: mpsc::Sender<Action>) {
     info!("Spawning API request");
+
+    // Clone what we need for the async task
+    let provider = app.provider.clone();
     let context = app.context.clone();
+    let model = app.model_name.clone();
     let effort = app.effort;
 
-    // Channel for the stream chunks (StreamChunk)
-    let (str_tx, str_rx) = mpsc::channel();
+    // Async channel for streaming chunks
+    let (chunk_tx, mut chunk_rx) = tokio::sync::mpsc::channel::<StreamChunk>(100);
 
-    // Clone tx for error handling before moving tx into forwarding task
-    let tx_error = tx.clone();
-    let tx_forward = tx;
+    // Clone tx for the streaming task
+    let tx_stream = tx.clone();
 
-    // Spawn async task to drive the stream
-    // Note: We don't send ResponseDone here on error - the blocking task below
-    // always sends ResponseDone when the channel closes, avoiding duplicates.
+    // Spawn the provider streaming task
     tokio::spawn(async move {
-        if let Err(e) = stream_completion(&context, effort, str_tx).await {
+        let request = CompletionRequest {
+            context: &context,
+            model: &model,
+            effort,
+        };
+
+        if let Err(e) = provider.stream_completion(request, chunk_tx).await {
             info!("Stream error: {}", e);
-            // Send error as a content chunk; ResponseDone is sent by forwarding task
-            let _ = tx_error.send(Action::ResponseChunk(format!("\n[Error: {}]", e)));
+            let _ = tx_stream.send(Action::ResponseChunk(format!("\n[Error: {}]", e)));
         }
     });
-    tokio::task::spawn_blocking(move || {
+
+    // Spawn a task to forward chunks to the Action channel
+    tokio::spawn(async move {
         let mut forwarded_count = 0usize;
         let mut total_content_len = 0usize;
-        while let Ok(chunk) = str_rx.recv() {
+
+        while let Some(chunk) = chunk_rx.recv().await {
             forwarded_count += 1;
             match chunk {
                 StreamChunk::Content(c) => {
                     total_content_len += c.len();
                     debug!("Forwarding Action::ResponseChunk (len={}, total={})", c.len(), total_content_len);
-                    let _ = tx_forward.send(Action::ResponseChunk(c));
+                    let _ = tx.send(Action::ResponseChunk(c));
                 }
                 StreamChunk::Thinking(t) => {
                     debug!("Forwarding Action::ThinkingChunk (len={})", t.len());
-                    let _ = tx_forward.send(Action::ThinkingChunk(t));
+                    let _ = tx.send(Action::ThinkingChunk(t));
                 }
             }
         }
+
         info!("Forwarding complete: {} actions, {} content bytes", forwarded_count, total_content_len);
-        let _ = tx_forward.send(Action::ResponseDone);
+        let _ = tx.send(Action::ResponseDone);
     });
 }
