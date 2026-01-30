@@ -112,17 +112,14 @@ impl Context {
 /// Higher effort = more reasoning tokens = better quality but higher cost
 #[derive(Serialize, Clone, Copy, Debug, Default, PartialEq)]
 pub enum Effort {
-    /// ~95% of max_tokens for reasoning - maximum depth
-    #[serde(rename = "xhigh")]
-    XHigh,
-    /// ~80% of max_tokens for reasoning - thorough analysis
+    /// Thorough analysis - model takes more time to reason
     #[serde(rename = "high")]
     High,
-    /// ~50% of max_tokens for reasoning - balanced (default)
+    /// Balanced reasoning (default)
     #[serde(rename = "medium")]
     #[default]
     Medium,
-    /// ~20% of max_tokens for reasoning - quick thinking
+    /// Quick thinking - faster but less thorough
     #[serde(rename = "low")]
     Low,
     /// Disables reasoning entirely
@@ -137,15 +134,13 @@ impl Effort {
             Effort::None => Effort::Low,
             Effort::Low => Effort::Medium,
             Effort::Medium => Effort::High,
-            Effort::High => Effort::XHigh,
-            Effort::XHigh => Effort::None,
+            Effort::High => Effort::None,
         }
     }
 
     /// Returns a human-readable label for display
     pub fn label(self) -> &'static str {
         match self {
-            Effort::XHigh => "XHigh",
             Effort::High => "High",
             Effort::Medium => "Medium",
             Effort::Low => "Low",
@@ -231,8 +226,7 @@ mod tests {
         assert_eq!(Effort::None.next(), Effort::Low);
         assert_eq!(Effort::Low.next(), Effort::Medium);
         assert_eq!(Effort::Medium.next(), Effort::High);
-        assert_eq!(Effort::High.next(), Effort::XHigh);
-        assert_eq!(Effort::XHigh.next(), Effort::None);
+        assert_eq!(Effort::High.next(), Effort::None);
     }
 
     #[test]

@@ -1,4 +1,3 @@
-mod api;
 mod core;
 mod inference;
 #[cfg(test)]

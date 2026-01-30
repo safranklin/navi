@@ -1,9 +1,9 @@
-//! OpenRouter provider implementation.
+//! OpenRouter provider implementation using the Responses API.
 //!
-//! This module uses OpenRouter/OpenAI API terminology internally:
-//! - "messages" (not "context")
+//! This module uses OpenAI Responses API terminology:
+//! - "input" (array of messages, not "context")
 //! - "role" (not "source")
-//! - "reasoning" (not "thinking")
+//! - SSE events: response.output_text.delta, response.reasoning_summary_text.delta
 
 use async_trait::async_trait;
 use log::{debug, info, warn};
@@ -15,10 +15,10 @@ use crate::inference::{
 };
 
 // ============================================================================
-// OpenRouter API Types
+// OpenRouter Responses API Types
 // ============================================================================
 
-/// Role in a chat message (OpenAI/OpenRouter terminology)
+/// Role in an input message (OpenAI terminology)
 #[derive(Serialize, Debug, Clone)]
 #[serde(rename_all = "lowercase")]
 enum Role {
@@ -27,74 +27,82 @@ enum Role {
     Assistant,
 }
 
-/// A single message in the chat (OpenRouter format)
+/// A single message in the input array
 #[derive(Serialize, Debug, Clone)]
-struct Message {
+struct InputMessage {
     role: Role,
     content: String,
 }
 
-/// Configuration for reasoning/thinking tokens
+/// Configuration for reasoning tokens
 #[derive(Serialize, Debug)]
 struct Reasoning {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    effort: Option<Effort>,
+    effort: String, // "low", "medium", or "high"
 }
 
-/// The request body for chat completions
+/// The request body for the Responses API
 #[derive(Serialize, Debug)]
-struct ChatCompletionRequest {
+struct ResponsesRequest {
     model: String,
-    messages: Vec<Message>,
+    input: Vec<InputMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stream: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning: Option<Reasoning>,
 }
 
-/// Streaming response from OpenRouter
+/// Generic SSE event wrapper to extract the type field
+/// OpenRouter embeds the event type inside the JSON, not in SSE event: lines
 #[derive(Deserialize, Debug)]
-struct StreamResponse {
-    choices: Vec<StreamChoice>,
-}
-
-#[derive(Deserialize, Debug)]
-struct StreamChoice {
-    delta: Delta,
-}
-
-#[derive(Deserialize, Debug)]
-struct Delta {
-    content: Option<String>,
-    reasoning: Option<String>,
+struct SseEvent {
+    #[serde(rename = "type")]
+    event_type: String,
+    #[serde(default)]
+    delta: String,
 }
 
 // ============================================================================
 // Translation Layer
 // ============================================================================
 
-/// Converts Navi's Context into OpenRouter's message format.
+/// Converts Navi's Context into Responses API input format.
 ///
-/// Filters out Thinking segments.
-fn context_to_messages(context: &Context) -> Vec<Message> {
-    context.items.iter().filter_map(|item| {
-        match item.source {
-            Source::Directive => Some(Role::System),
-            Source::User => Some(Role::User),
-            Source::Model => Some(Role::Assistant),
-            Source::Thinking => None, // Skip Thinking items
-        }.map(|role| Message {
-            role,
-            content: item.content.clone(),
+/// Filters out Thinking segments (reasoning is model-generated, not input).
+fn context_to_input(context: &Context) -> Vec<InputMessage> {
+    context
+        .items
+        .iter()
+        .filter_map(|item| {
+            match item.source {
+                Source::Directive => Some(Role::System),
+                Source::User => Some(Role::User),
+                Source::Model => Some(Role::Assistant),
+                Source::Thinking => None, // Skip Thinking items
+            }
+            .map(|role| InputMessage {
+                role,
+                content: item.content.clone(),
+            })
         })
-    }).collect()
+        .collect()
+}
+
+/// Maps our Effort enum to Responses API effort string.
+/// Returns None for Effort::None (omit reasoning entirely).
+fn effort_to_string(effort: Effort) -> Option<String> {
+    match effort {
+        Effort::High => Some("high".to_string()),
+        Effort::Medium => Some("medium".to_string()),
+        Effort::Low => Some("low".to_string()),
+        Effort::None => None,
+    }
 }
 
 // ============================================================================
 // Provider Implementation
 // ============================================================================
 
-/// OpenRouter API provider
+/// OpenRouter API provider using Responses API
 pub struct OpenRouterProvider {
     api_key: String,
     base_url: String,
@@ -127,38 +135,32 @@ impl CompletionProvider for OpenRouterProvider {
         request: CompletionRequest<'_>,
         sender: Sender<StreamChunk>,
     ) -> Result<(), ProviderError> {
-        // Build the reasoning config
-        let reasoning = if request.effort == Effort::None {
-            None
-        } else {
-            Some(Reasoning {
-                effort: Some(request.effort),
-            })
-        };
+        // Build the reasoning config (None if effort is None)
+        let reasoning = effort_to_string(request.effort).map(|effort| Reasoning { effort });
 
-        // Translate domain types to OpenRouter format
-        let messages = context_to_messages(request.context);
+        // Translate domain types to Responses API format
+        let input = context_to_input(request.context);
 
-        let chat_request = ChatCompletionRequest {
+        let responses_request = ResponsesRequest {
             model: request.model.to_string(),
-            messages,
+            input,
             stream: Some(true),
             reasoning,
         };
 
         info!(
-            "OpenRouter request: model={}, messages={}, effort={:?}",
+            "OpenRouter Responses API request: model={}, input_count={}, effort={:?}",
             request.model,
-            chat_request.messages.len(),
+            responses_request.input.len(),
             request.effort
         );
 
-        // Make the API request
+        // Make the API request to the Responses endpoint
         let response = self
             .client
-            .post(format!("{}/chat/completions", self.base_url))
+            .post(format!("{}/responses", self.base_url))
             .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&chat_request)
+            .json(&responses_request)
             .send()
             .await
             .map_err(|e| ProviderError::Network(e.to_string()))?;
@@ -178,8 +180,9 @@ impl CompletionProvider for OpenRouterProvider {
             });
         }
 
-        // Process the SSE stream
+        // Process the SSE stream with typed events
         let mut buffer = String::new();
+        let mut current_event_type: Option<String> = None;
         let mut total_content_len = 0usize;
         let mut chunk_count = 0usize;
         let mut response = response;
@@ -193,53 +196,100 @@ impl CompletionProvider for OpenRouterProvider {
             debug!("Raw chunk received: {} bytes", chunk.len());
             buffer.push_str(&s);
 
+            // Process complete lines from buffer
             while let Some(pos) = buffer.find('\n') {
                 let line = buffer[..pos].to_string();
                 buffer.drain(..pos + 1);
 
                 let line = line.trim();
-                if line.starts_with("data: ") {
-                    let data = &line[6..];
+
+                // Log all non-empty lines for debugging
+                if !line.is_empty() {
+                    debug!("SSE line: {}", line);
+                }
+
+                // Parse SSE event type
+                if let Some(event_type) = line.strip_prefix("event: ") {
+                    debug!("SSE event type: {}", event_type);
+                    current_event_type = Some(event_type.to_string());
+                    continue;
+                }
+
+                // Parse SSE data
+                if let Some(data) = line.strip_prefix("data: ") {
+                    // Skip [DONE] marker
                     if data == "[DONE]" {
-                        info!(
-                            "Stream complete: {} chunks, {} total content bytes",
-                            chunk_count, total_content_len
-                        );
-                        return Ok(());
+                        debug!("Received [DONE] marker");
+                        continue;
                     }
 
-                    // Parse JSON
-                    if let Ok(stream_resp) = serde_json::from_str::<StreamResponse>(data) {
-                        if let Some(choice) = stream_resp.choices.first() {
-                            // Handle reasoning (thinking) if present
-                            if let Some(reasoning) = &choice.delta.reasoning {
-                                if !reasoning.is_empty() {
-                                    chunk_count += 1;
-                                    debug!("Sending Thinking chunk (len={})", reasoning.len());
-                                    if sender.send(StreamChunk::Thinking(reasoning.clone())).await.is_err() {
-                                        warn!("Thinking chunk send failed: receiver dropped");
-                                        return Err(ProviderError::ChannelClosed);
-                                    }
-                                }
-                            }
-                            // Handle content if present
-                            if let Some(content) = &choice.delta.content {
-                                if !content.is_empty() {
-                                    chunk_count += 1;
-                                    total_content_len += content.len();
-                                    debug!(
-                                        "Sending Content chunk (len={}, total={})",
-                                        content.len(),
-                                        total_content_len
-                                    );
-                                    if sender.send(StreamChunk::Content(content.clone())).await.is_err() {
-                                        warn!("Content chunk send failed: receiver dropped");
-                                        return Err(ProviderError::ChannelClosed);
-                                    }
+                    // OpenRouter embeds type in JSON, not in event: lines
+                    // Parse the JSON to extract the type field
+                    let event_type = current_event_type.clone().or_else(|| {
+                        serde_json::from_str::<SseEvent>(data)
+                            .ok()
+                            .map(|e| e.event_type)
+                    });
+
+                    debug!("SSE data for event {:?}: {} bytes", event_type, data.len());
+
+                    match event_type.as_deref() {
+                        Some("response.output_text.delta") => {
+                            if let Ok(event) = serde_json::from_str::<SseEvent>(data)
+                                && !event.delta.is_empty()
+                            {
+                                chunk_count += 1;
+                                total_content_len += event.delta.len();
+                                debug!(
+                                    "Sending Content chunk (len={}, total={})",
+                                    event.delta.len(),
+                                    total_content_len
+                                );
+                                if sender
+                                    .send(StreamChunk::Content(event.delta))
+                                    .await
+                                    .is_err()
+                                {
+                                    warn!("Content chunk send failed: receiver dropped");
+                                    return Err(ProviderError::ChannelClosed);
                                 }
                             }
                         }
+                        Some("response.reasoning_summary_text.delta") => {
+                            if let Ok(event) = serde_json::from_str::<SseEvent>(data)
+                                && !event.delta.is_empty()
+                            {
+                                chunk_count += 1;
+                                debug!("Sending Thinking chunk (len={})", event.delta.len());
+                                if sender
+                                    .send(StreamChunk::Thinking(event.delta))
+                                    .await
+                                    .is_err()
+                                {
+                                    warn!("Thinking chunk send failed: receiver dropped");
+                                    return Err(ProviderError::ChannelClosed);
+                                }
+                            }
+                        }
+                        Some("response.completed") => {
+                            info!(
+                                "Stream complete: {} chunks, {} total content bytes",
+                                chunk_count, total_content_len
+                            );
+                            debug!("response.completed data: {}", data);
+                            return Ok(());
+                        }
+                        Some(other) => {
+                            // Ignore other event types (response.created, response.in_progress, etc.)
+                            debug!("Ignoring event type '{}': {} bytes", other, data.len());
+                        }
+                        None => {
+                            debug!("Could not parse event type from data: {}", data);
+                        }
                     }
+
+                    // Reset event type after processing data
+                    current_event_type = None;
                 }
             }
         }

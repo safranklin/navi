@@ -1,9 +1,9 @@
-//! LM Studio provider implementation.
+//! LM Studio provider implementation using the Responses API.
 //!
-//! This module uses OpenAI-compatible API terminology internally:
-//! - "messages" (not "context")
-//! - "role" (not "source")
-//! - "reasoning" (not "thinking")
+//! LM Studio v0.3.29+ supports the /v1/responses endpoint with:
+//! - Stateful interactions via previous_response_id (we don't use this)
+//! - Reasoning support with effort parameter
+//! - Streaming with SSE events
 
 use async_trait::async_trait;
 use log::{debug, info, warn};
@@ -11,14 +11,14 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::Sender;
 
 use crate::inference::{
-    CompletionProvider, CompletionRequest, Context, ProviderError, Source, StreamChunk,
+    CompletionProvider, CompletionRequest, Context, Effort, ProviderError, Source, StreamChunk,
 };
 
 // ============================================================================
-// LM Studio API Types (separate from OpenRouter to avoid coupling)
+// LM Studio Responses API Types
 // ============================================================================
 
-/// Role in a chat message (OpenAI terminology)
+/// Role in an input message (OpenAI terminology)
 #[derive(Serialize, Debug, Clone)]
 #[serde(rename_all = "lowercase")]
 enum Role {
@@ -27,47 +27,50 @@ enum Role {
     Assistant,
 }
 
-/// A single message in the chat (LM Studio format)
+/// A single message in the input array
 #[derive(Serialize, Debug, Clone)]
-struct Message {
+struct InputMessage {
     role: Role,
     content: String,
 }
 
-/// The request body for chat completions
+/// Configuration for reasoning tokens
 #[derive(Serialize, Debug)]
-struct ChatCompletionRequest {
+struct Reasoning {
+    effort: String, // "low", "medium", or "high"
+}
+
+/// The request body for the Responses API
+#[derive(Serialize, Debug)]
+struct ResponsesRequest {
     model: String,
-    messages: Vec<Message>,
+    input: Vec<InputMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stream: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning: Option<Reasoning>,
 }
 
-/// Streaming response from LM Studio
+/// SSE event for text content delta
 #[derive(Deserialize, Debug)]
-struct StreamResponse {
-    choices: Vec<StreamChoice>,
+struct TextDeltaEvent {
+    delta: String,
 }
 
+/// SSE event for reasoning delta
 #[derive(Deserialize, Debug)]
-struct StreamChoice {
-    delta: Delta,
-}
-
-#[derive(Deserialize, Debug)]
-struct Delta {
-    content: Option<String>,
-    reasoning: Option<String>,
+struct ReasoningDeltaEvent {
+    delta: String,
 }
 
 // ============================================================================
 // Translation Layer
 // ============================================================================
 
-/// Converts Navi's Context into LM Studio's message format.
+/// Converts Navi's Context into Responses API input format.
 ///
-/// Filters out Thinking segments (reasoning tokens are model-generated, not input).
-fn context_to_messages(context: &Context) -> Vec<Message> {
+/// Filters out Thinking segments (reasoning is model-generated, not input).
+fn context_to_input(context: &Context) -> Vec<InputMessage> {
     context
         .items
         .iter()
@@ -78,7 +81,7 @@ fn context_to_messages(context: &Context) -> Vec<Message> {
                 Source::Model => Some(Role::Assistant),
                 Source::Thinking => None, // Skip Thinking items
             }
-            .map(|role| Message {
+            .map(|role| InputMessage {
                 role,
                 content: item.content.clone(),
             })
@@ -86,11 +89,22 @@ fn context_to_messages(context: &Context) -> Vec<Message> {
         .collect()
 }
 
+/// Maps our Effort enum to Responses API effort string.
+/// Returns None for Effort::None (omit reasoning entirely).
+fn effort_to_string(effort: Effort) -> Option<String> {
+    match effort {
+        Effort::High => Some("high".to_string()),
+        Effort::Medium => Some("medium".to_string()),
+        Effort::Low => Some("low".to_string()),
+        Effort::None => None,
+    }
+}
+
 // ============================================================================
 // Provider Implementation
 // ============================================================================
 
-/// LM Studio API provider (local inference server)
+/// LM Studio API provider using Responses API (local inference server)
 pub struct LmStudioProvider {
     base_url: String,
     client: reqwest::Client,
@@ -121,29 +135,31 @@ impl CompletionProvider for LmStudioProvider {
         request: CompletionRequest<'_>,
         sender: Sender<StreamChunk>,
     ) -> Result<(), ProviderError> {
-        // Note: LM Studio doesn't support reasoning.effort input parameter.
-        // Models that support reasoning will emit delta.reasoning tokens automatically.
-        // We simply ignore request.effort here.
+        // Build the reasoning config (None if effort is None)
+        let reasoning = effort_to_string(request.effort).map(|effort| Reasoning { effort });
 
-        let messages = context_to_messages(request.context);
+        // Translate domain types to Responses API format
+        let input = context_to_input(request.context);
 
-        let chat_request = ChatCompletionRequest {
+        let responses_request = ResponsesRequest {
             model: request.model.to_string(),
-            messages,
+            input,
             stream: Some(true),
+            reasoning,
         };
 
         info!(
-            "LM Studio request: model={}, messages={}",
+            "LM Studio Responses API request: model={}, input_count={}, effort={:?}",
             request.model,
-            chat_request.messages.len()
+            responses_request.input.len(),
+            request.effort
         );
 
-        // Make the API request (no auth header for local LM Studio)
+        // Make the API request to the Responses endpoint (no auth for local LM Studio)
         let response = self
             .client
-            .post(format!("{}/chat/completions", self.base_url))
-            .json(&chat_request)
+            .post(format!("{}/responses", self.base_url))
+            .json(&responses_request)
             .send()
             .await
             .map_err(|e| ProviderError::Network(e.to_string()))?;
@@ -163,8 +179,9 @@ impl CompletionProvider for LmStudioProvider {
             });
         }
 
-        // Process the SSE stream
+        // Process the SSE stream with typed events
         let mut buffer = String::new();
+        let mut current_event_type: Option<String> = None;
         let mut total_content_len = 0usize;
         let mut chunk_count = 0usize;
         let mut response = response;
@@ -178,61 +195,87 @@ impl CompletionProvider for LmStudioProvider {
             debug!("Raw chunk received: {} bytes", chunk.len());
             buffer.push_str(&s);
 
+            // Process complete lines from buffer
             while let Some(pos) = buffer.find('\n') {
                 let line = buffer[..pos].to_string();
                 buffer.drain(..pos + 1);
 
                 let line = line.trim();
-                if line.starts_with("data: ") {
-                    let data = &line[6..];
-                    if data == "[DONE]" {
-                        info!(
-                            "Stream complete: {} chunks, {} total content bytes",
-                            chunk_count, total_content_len
-                        );
-                        return Ok(());
-                    }
 
-                    // Parse JSON
-                    if let Ok(stream_resp) = serde_json::from_str::<StreamResponse>(data) {
-                        if let Some(choice) = stream_resp.choices.first() {
-                            // Handle reasoning (thinking) if present
-                            if let Some(reasoning) = &choice.delta.reasoning {
-                                if !reasoning.is_empty() {
-                                    chunk_count += 1;
-                                    debug!("Sending Thinking chunk (len={})", reasoning.len());
-                                    if sender
-                                        .send(StreamChunk::Thinking(reasoning.clone()))
-                                        .await
-                                        .is_err()
-                                    {
-                                        warn!("Thinking chunk send failed: receiver dropped");
-                                        return Err(ProviderError::ChannelClosed);
-                                    }
-                                }
-                            }
-                            // Handle content if present
-                            if let Some(content) = &choice.delta.content {
-                                if !content.is_empty() {
-                                    chunk_count += 1;
-                                    total_content_len += content.len();
-                                    debug!(
-                                        "Sending Content chunk (len={}, total={})",
-                                        content.len(),
-                                        total_content_len
-                                    );
-                                    if sender
-                                        .send(StreamChunk::Content(content.clone()))
-                                        .await
-                                        .is_err()
-                                    {
-                                        warn!("Content chunk send failed: receiver dropped");
-                                        return Err(ProviderError::ChannelClosed);
-                                    }
+                // Log all non-empty lines for debugging
+                if !line.is_empty() {
+                    debug!("SSE line: {}", line);
+                }
+
+                // Parse SSE event type
+                if let Some(event_type) = line.strip_prefix("event: ") {
+                    debug!("SSE event type: {}", event_type);
+                    current_event_type = Some(event_type.to_string());
+                    continue;
+                }
+
+                // Parse SSE data
+                if let Some(data) = line.strip_prefix("data: ") {
+                    debug!("SSE data for event {:?}: {} bytes", current_event_type, data.len());
+                    match current_event_type.as_deref() {
+                        Some("response.output_text.delta") => {
+                            if let Ok(event) = serde_json::from_str::<TextDeltaEvent>(data)
+                                && !event.delta.is_empty()
+                            {
+                                chunk_count += 1;
+                                total_content_len += event.delta.len();
+                                debug!(
+                                    "Sending Content chunk (len={}, total={})",
+                                    event.delta.len(),
+                                    total_content_len
+                                );
+                                if sender
+                                    .send(StreamChunk::Content(event.delta))
+                                    .await
+                                    .is_err()
+                                {
+                                    warn!("Content chunk send failed: receiver dropped");
+                                    return Err(ProviderError::ChannelClosed);
                                 }
                             }
                         }
+                        Some("response.reasoning_text.delta") => {
+                            if let Ok(event) = serde_json::from_str::<ReasoningDeltaEvent>(data)
+                                && !event.delta.is_empty()
+                            {
+                                chunk_count += 1;
+                                debug!("Sending Thinking chunk (len={})", event.delta.len());
+                                if sender
+                                    .send(StreamChunk::Thinking(event.delta))
+                                    .await
+                                    .is_err()
+                                {
+                                    warn!("Thinking chunk send failed: receiver dropped");
+                                    return Err(ProviderError::ChannelClosed);
+                                }
+                            }
+                        }
+                        Some("response.completed") => {
+                            info!(
+                                "Stream complete: {} chunks, {} total content bytes",
+                                chunk_count, total_content_len
+                            );
+                            // Log the full completed event data to see if reasoning is in here
+                            debug!("response.completed data: {}", data);
+                            return Ok(());
+                        }
+                        Some(other) => {
+                            // Log unrecognized event types so we can discover new ones
+                            debug!("Unrecognized event type '{}' with data: {}", other, data);
+                        }
+                        None => {
+                            // Data without event type - log it
+                            debug!("Data without event type: {}", data);
+                        }
                     }
+
+                    // Reset event type after processing data
+                    current_event_type = None;
                 }
             }
         }

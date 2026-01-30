@@ -20,7 +20,7 @@ use tui_scrollview::ScrollViewState;
 
 use crate::core::action::{Action, update, Effect};
 use crate::core::state::App;
-use crate::inference::{CompletionRequest, LmStudioProvider, StreamChunk};
+use crate::inference::{CompletionRequest, LmStudioProvider, OpenRouterProvider, StreamChunk};
 use crate::tui::event::{poll_event, poll_event_immediate, TuiEvent};
 
 /// Cached layout measurements for efficient rendering and hit testing
@@ -152,7 +152,11 @@ impl Drop for MouseCaptureGuard {
 
 pub fn run() -> std::io::Result<()> {
     // Create the LLM provider (LM Studio - local inference)
-    let provider = Arc::new(LmStudioProvider::new(None));
+    // let provider = Arc::new(LmStudioProvider::new(None));
+    let provider = Arc::new(OpenRouterProvider::new(
+        env::var("OPENROUTER_API_KEY").expect("OPENROUTER_API_KEY must be set"),
+        None,
+    ));
 
     let model_name = env::var("PRIMARY_MODEL_NAME").expect("PRIMARY_MODEL_NAME must be set");
     let mut app = App::new(provider, model_name);
