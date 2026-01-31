@@ -15,7 +15,10 @@ use std::env;
 use std::io::stdout;
 use std::sync::{mpsc, Arc};
 use crossterm::execute;
-use crossterm::event::{EnableMouseCapture, DisableMouseCapture};
+use crossterm::event::{
+    EnableMouseCapture, DisableMouseCapture, EnableBracketedPaste, DisableBracketedPaste,
+    KeyboardEnhancementFlags, PushKeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+};
 use tui_scrollview::ScrollViewState;
 
 use crate::core::action::{Action, update, Effect};
@@ -136,18 +139,35 @@ impl TuiState {
     }
 }
 
-struct MouseCaptureGuard;
+struct TerminalModeGuard;
 
-impl MouseCaptureGuard {
+impl TerminalModeGuard {
     fn new() -> std::io::Result<Self> {
-        execute!(stdout(), EnableMouseCapture)?;
+        // Enable Kitty keyboard protocol unconditionally (allows Shift+Enter detection)
+        // Detection via supports_keyboard_enhancement() fails in WSL, but the protocol
+        // is harmlessly ignored by terminals that don't support it
+        execute!(
+            stdout(),
+            EnableMouseCapture,
+            EnableBracketedPaste,
+            PushKeyboardEnhancementFlags(
+                KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                    | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+            )
+        )?;
+        info!("Terminal modes enabled (mouse, bracketed paste, keyboard enhancement)");
         Ok(Self)
     }
 }
 
-impl Drop for MouseCaptureGuard {
+impl Drop for TerminalModeGuard {
     fn drop(&mut self) {
-        let _ = execute!(stdout(), DisableMouseCapture);
+        let _ = execute!(
+            stdout(),
+            PopKeyboardEnhancementFlags,
+            DisableMouseCapture,
+            DisableBracketedPaste
+        );
     }
 }
 
@@ -164,7 +184,7 @@ pub fn run(provider_choice: Provider) -> std::io::Result<()> {
     let mut app = App::new(provider, model_name);
     let mut tui = TuiState::new();
     let mut terminal = ratatui::init();
-    let _mouse_capture_guard = MouseCaptureGuard::new();
+    let _terminal_mode_guard = TerminalModeGuard::new();
 
     // Channel for actions from background tasks
     let (tx, rx) = mpsc::channel();
@@ -183,6 +203,9 @@ pub fn run(provider_choice: Provider) -> std::io::Result<()> {
                 // TUI-local events - modify TuiState directly
                 TuiEvent::InputChar(c) => {
                     tui.input_buffer.push(c);
+                }
+                TuiEvent::Paste(text) => {
+                    tui.input_buffer.push_str(&text);
                 }
                 TuiEvent::Backspace => {
                     tui.input_buffer.pop();

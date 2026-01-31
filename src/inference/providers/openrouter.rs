@@ -126,10 +126,6 @@ impl OpenRouterProvider {
 
 #[async_trait]
 impl CompletionProvider for OpenRouterProvider {
-    fn name(&self) -> &str {
-        "openrouter"
-    }
-
     async fn stream_completion(
         &self,
         request: CompletionRequest<'_>,

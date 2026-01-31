@@ -126,10 +126,6 @@ impl LmStudioProvider {
 
 #[async_trait]
 impl CompletionProvider for LmStudioProvider {
-    fn name(&self) -> &str {
-        "lmstudio"
-    }
-
     async fn stream_completion(
         &self,
         request: CompletionRequest<'_>,

@@ -15,10 +15,6 @@ pub struct NoopProvider;
 
 #[async_trait]
 impl CompletionProvider for NoopProvider {
-    fn name(&self) -> &str {
-        "noop"
-    }
-
     async fn stream_completion(
         &self,
         _request: CompletionRequest<'_>,
