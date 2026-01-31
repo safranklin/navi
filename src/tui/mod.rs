@@ -20,7 +20,8 @@ use tui_scrollview::ScrollViewState;
 
 use crate::core::action::{Action, update, Effect};
 use crate::core::state::App;
-use crate::inference::{CompletionRequest, LmStudioProvider, OpenRouterProvider, StreamChunk};
+use crate::inference::{CompletionRequest, CompletionProvider, LmStudioProvider, OpenRouterProvider, StreamChunk};
+use crate::Provider;
 use crate::tui::event::{poll_event, poll_event_immediate, TuiEvent};
 
 /// Cached layout measurements for efficient rendering and hit testing
@@ -150,13 +151,14 @@ impl Drop for MouseCaptureGuard {
     }
 }
 
-pub fn run() -> std::io::Result<()> {
-    // Create the LLM provider (LM Studio - local inference)
-    // let provider = Arc::new(LmStudioProvider::new(None));
-    let provider = Arc::new(OpenRouterProvider::new(
-        env::var("OPENROUTER_API_KEY").expect("OPENROUTER_API_KEY must be set"),
-        None,
-    ));
+pub fn run(provider_choice: Provider) -> std::io::Result<()> {
+    let provider: Arc<dyn CompletionProvider> = match provider_choice {
+        Provider::OpenRouter => Arc::new(OpenRouterProvider::new(
+            env::var("OPENROUTER_API_KEY").expect("OPENROUTER_API_KEY must be set"),
+            None,
+        )),
+        Provider::LmStudio => Arc::new(LmStudioProvider::new(None)),
+    };
 
     let model_name = env::var("PRIMARY_MODEL_NAME").expect("PRIMARY_MODEL_NAME must be set");
     let mut app = App::new(provider, model_name);
