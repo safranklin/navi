@@ -41,6 +41,12 @@ pub struct LayoutCache {
     content_width: u16,
 }
 
+impl Default for LayoutCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LayoutCache {
     pub fn new() -> Self {
         Self {
@@ -55,14 +61,9 @@ impl LayoutCache {
     /// Returns 0 if full rebuild needed, or N if first N heights are reusable.
     pub fn reusable_count(&self, message_count: usize, content_width: u16, is_loading: bool) -> usize {
         // Return the number of heights that can be reused (0 = full rebuild).
-        if self.content_width != content_width {
-            0 // Full rebuild needed, width changed which can affect all message's heights
-        }
-        else if self.heights.is_empty() {
-            0 // Cache empty, nothing to reuse
-        }
-        else if message_count < self.message_count {
-            0 // Some message was removed, full rebuild needed since we don't track individual message validity; this is expected to be rare
+        // Full rebuild needed if: width changed, cache empty, or messages removed
+        if self.content_width != content_width || self.heights.is_empty() || message_count < self.message_count {
+            0
         }
         else if is_loading {
             if message_count == 0 {
@@ -124,6 +125,12 @@ pub struct TuiState {
     pub layout: LayoutCache,
     /// When true, auto-scroll to bottom on new content (chat-style behavior)
     pub stick_to_bottom: bool,
+}
+
+impl Default for TuiState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TuiState {

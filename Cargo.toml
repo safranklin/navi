@@ -17,3 +17,7 @@ futures = "0.3.31"
 log = "0.4"
 simplelog = "0.12"
 clap = { version = "4", features = ["derive"] }
+
+[dev-dependencies]
+wiremock = "0.6"        # Mock HTTP server for integration tests
+tokio-test = "0.4"      # Async test utilities

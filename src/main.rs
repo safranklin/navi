@@ -4,16 +4,10 @@ mod inference;
 mod test_support;
 mod tui;
 
-use clap::{Parser, ValueEnum};
+use clap::Parser;
+use navi::Provider;
 use simplelog::{ConfigBuilder, LevelFilter, WriteLogger};
 use std::fs::File;
-
-#[derive(Clone, Debug, Default, ValueEnum)]
-pub enum Provider {
-    #[default]
-    OpenRouter,
-    LmStudio,
-}
 
 #[derive(Parser)]
 #[command(name = "navi", about = "Model-agnostic AI assistant")]

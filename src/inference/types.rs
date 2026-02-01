@@ -46,6 +46,12 @@ pub struct Context {
     pub items: Vec<ContextSegment>,
 }
 
+impl Default for Context {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Context {
     /// Creates a new Context with the default system directive.
     pub fn new() -> Self {
@@ -74,13 +80,12 @@ impl Context {
     /// If the last message is not from the model, creates a new one.
     pub fn append_to_last_model_message(&mut self, content: &str) {
         let normalized = replace_typography(content);
-        
-        if let Some(last) = self.items.last_mut() {
-            if last.source == Source::Model {
+
+        if let Some(last) = self.items.last_mut()
+            && last.source == Source::Model {
                 last.content.push_str(&normalized);
                 return;
             }
-        }
         
         // If we get here, either no items or last item is not model
         self.add(ContextSegment {
@@ -93,13 +98,12 @@ impl Context {
     /// If the last message is not thinking, creates a new one.
     pub fn append_to_last_thinking_message(&mut self, content: &str) {
         let normalized = replace_typography(content);
-        
-        if let Some(last) = self.items.last_mut() {
-            if last.source == Source::Thinking {
+
+        if let Some(last) = self.items.last_mut()
+            && last.source == Source::Thinking {
                 last.content.push_str(&normalized);
                 return;
             }
-        }
         
         self.add(ContextSegment {
             source: Source::Thinking,

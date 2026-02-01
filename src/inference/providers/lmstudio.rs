@@ -37,7 +37,7 @@ struct InputMessage {
 /// Configuration for reasoning tokens
 #[derive(Serialize, Debug)]
 struct Reasoning {
-    effort: String, // "low", "medium", or "high"
+    effort: &'static str, // "low", "medium", or "high"
 }
 
 /// The request body for the Responses API
@@ -51,15 +51,9 @@ struct ResponsesRequest {
     reasoning: Option<Reasoning>,
 }
 
-/// SSE event for text content delta
+/// SSE event for delta content (used for both text and reasoning)
 #[derive(Deserialize, Debug)]
-struct TextDeltaEvent {
-    delta: String,
-}
-
-/// SSE event for reasoning delta
-#[derive(Deserialize, Debug)]
-struct ReasoningDeltaEvent {
+struct DeltaEvent {
     delta: String,
 }
 
@@ -91,11 +85,11 @@ fn context_to_input(context: &Context) -> Vec<InputMessage> {
 
 /// Maps our Effort enum to Responses API effort string.
 /// Returns None for Effort::None (omit reasoning entirely).
-fn effort_to_string(effort: Effort) -> Option<String> {
+fn effort_to_string(effort: Effort) -> Option<&'static str> {
     match effort {
-        Effort::High => Some("high".to_string()),
-        Effort::Medium => Some("medium".to_string()),
-        Effort::Low => Some("low".to_string()),
+        Effort::High => Some("high"),
+        Effort::Medium => Some("medium"),
+        Effort::Low => Some("low"),
         Effort::None => None,
     }
 }
@@ -215,7 +209,7 @@ impl CompletionProvider for LmStudioProvider {
                     debug!("SSE data for event {:?}: {} bytes", current_event_type, data.len());
                     match current_event_type.as_deref() {
                         Some("response.output_text.delta") => {
-                            if let Ok(event) = serde_json::from_str::<TextDeltaEvent>(data)
+                            if let Ok(event) = serde_json::from_str::<DeltaEvent>(data)
                                 && !event.delta.is_empty()
                             {
                                 chunk_count += 1;
@@ -236,7 +230,7 @@ impl CompletionProvider for LmStudioProvider {
                             }
                         }
                         Some("response.reasoning_text.delta") => {
-                            if let Ok(event) = serde_json::from_str::<ReasoningDeltaEvent>(data)
+                            if let Ok(event) = serde_json::from_str::<DeltaEvent>(data)
                                 && !event.delta.is_empty()
                             {
                                 chunk_count += 1;
@@ -281,5 +275,179 @@ impl CompletionProvider for LmStudioProvider {
             chunk_count, total_content_len
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::inference::{Context, ContextSegment, Effort, Source};
+
+    #[test]
+    fn test_context_to_input_filters_thinking() {
+        let mut context = Context::new();
+        context.add(ContextSegment {
+            source: Source::User,
+            content: "Hello".to_string(),
+        });
+        context.add(ContextSegment {
+            source: Source::Thinking,
+            content: "Internal thought".to_string(),
+        });
+        context.add(ContextSegment {
+            source: Source::Model,
+            content: "Response".to_string(),
+        });
+
+        let input = context_to_input(&context);
+
+        // Should have 3 items: Directive (from Context::new), User, and Model
+        // Thinking should be filtered out
+        assert_eq!(input.len(), 3);
+        assert!(matches!(input[0].role, Role::System));
+        assert!(matches!(input[1].role, Role::User));
+        assert_eq!(input[1].content, "Hello");
+        assert!(matches!(input[2].role, Role::Assistant));
+        assert_eq!(input[2].content, "Response");
+    }
+
+    #[test]
+    fn test_context_to_input_translates_roles_correctly() {
+        let mut context = Context::new();
+        // Clear default directive for this test
+        context.items.clear();
+
+        context.add(ContextSegment {
+            source: Source::Directive,
+            content: "System message".to_string(),
+        });
+        context.add(ContextSegment {
+            source: Source::User,
+            content: "User message".to_string(),
+        });
+        context.add(ContextSegment {
+            source: Source::Model,
+            content: "Model message".to_string(),
+        });
+
+        let input = context_to_input(&context);
+
+        assert_eq!(input.len(), 3);
+        assert!(matches!(input[0].role, Role::System));
+        assert_eq!(input[0].content, "System message");
+        assert!(matches!(input[1].role, Role::User));
+        assert_eq!(input[1].content, "User message");
+        assert!(matches!(input[2].role, Role::Assistant));
+        assert_eq!(input[2].content, "Model message");
+    }
+
+    #[test]
+    fn test_effort_to_string_returns_correct_values() {
+        assert_eq!(effort_to_string(Effort::High), Some("high"));
+        assert_eq!(effort_to_string(Effort::Medium), Some("medium"));
+        assert_eq!(effort_to_string(Effort::Low), Some("low"));
+        assert_eq!(effort_to_string(Effort::None), None);
+    }
+
+    #[test]
+    fn test_delta_event_deserializes_correctly() {
+        let json = r#"{"delta":"test content"}"#;
+        let event: DeltaEvent = serde_json::from_str(json).unwrap();
+        assert_eq!(event.delta, "test content");
+    }
+
+    #[test]
+    fn test_delta_event_with_empty_delta() {
+        let json = r#"{"delta":""}"#;
+        let event: DeltaEvent = serde_json::from_str(json).unwrap();
+        assert_eq!(event.delta, "");
+    }
+
+    #[test]
+    fn test_input_message_serializes_correctly() {
+        let msg = InputMessage {
+            role: Role::User,
+            content: "test".to_string(),
+        };
+
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains(r#""role":"user"#));
+        assert!(json.contains(r#""content":"test"#));
+    }
+
+    #[test]
+    fn test_role_serialization() {
+        let system = serde_json::to_string(&Role::System).unwrap();
+        assert_eq!(system, "\"system\"");
+
+        let user = serde_json::to_string(&Role::User).unwrap();
+        assert_eq!(user, "\"user\"");
+
+        let assistant = serde_json::to_string(&Role::Assistant).unwrap();
+        assert_eq!(assistant, "\"assistant\"");
+    }
+
+    #[test]
+    fn test_responses_request_omits_none_fields() {
+        let request = ResponsesRequest {
+            model: "test".to_string(),
+            input: vec![],
+            stream: None,
+            reasoning: None,
+        };
+
+        let json = serde_json::to_string(&request).unwrap();
+        // None fields should be omitted
+        assert!(!json.contains("stream"));
+        assert!(!json.contains("reasoning"));
+    }
+
+    #[test]
+    fn test_responses_request_includes_some_fields() {
+        let request = ResponsesRequest {
+            model: "test".to_string(),
+            input: vec![],
+            stream: Some(true),
+            reasoning: Some(Reasoning {
+                effort: "medium",
+            }),
+        };
+
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains(r#""stream":true"#));
+        assert!(json.contains(r#""effort":"medium"#));
+    }
+
+    #[test]
+    fn test_lmstudio_provider_new_with_env_var() {
+        unsafe {
+            std::env::set_var("LM_STUDIO_BASE_URL", "http://test:1234");
+        }
+        let provider = LmStudioProvider::new(None);
+        assert_eq!(provider.base_url, "http://test:1234");
+        unsafe {
+            std::env::remove_var("LM_STUDIO_BASE_URL");
+        }
+    }
+
+    #[test]
+    fn test_lmstudio_provider_new_with_explicit_url() {
+        unsafe {
+            std::env::set_var("LM_STUDIO_BASE_URL", "http://env:1234");
+        }
+        let provider = LmStudioProvider::new(Some("http://explicit:5678".to_string()));
+        assert_eq!(provider.base_url, "http://explicit:5678");
+        unsafe {
+            std::env::remove_var("LM_STUDIO_BASE_URL");
+        }
+    }
+
+    #[test]
+    fn test_lmstudio_provider_new_with_defaults() {
+        unsafe {
+            std::env::remove_var("LM_STUDIO_BASE_URL");
+        }
+        let provider = LmStudioProvider::new(None);
+        assert_eq!(provider.base_url, "http://localhost:1234/v1");
     }
 }

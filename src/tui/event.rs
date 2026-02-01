@@ -30,8 +30,8 @@ pub fn poll_event_immediate() -> Option<TuiEvent> {
 }
 
 fn poll_event_timeout(timeout: std::time::Duration) -> Option<TuiEvent> {
-    if event::poll(timeout).unwrap() {
-        match event::read().unwrap() {
+    if event::poll(timeout).ok()? {
+        match event::read().ok()? {
             Event::Key(key_event) => {
                 // Debug: log all key events to see what the terminal sends
                 log::debug!("Key event: {:?} with modifiers {:?}", key_event.code, key_event.modifiers);
