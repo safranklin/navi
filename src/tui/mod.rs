@@ -9,6 +9,8 @@
 
 mod event;
 mod ui;
+mod component;
+mod components;
 
 use log::{debug, info};
 use std::env;
