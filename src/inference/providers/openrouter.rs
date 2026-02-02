@@ -49,6 +49,8 @@ struct ResponsesRequest {
     stream: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning: Option<Reasoning>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    include_reasoning: Option<bool>,
 }
 
 /// Generic SSE event wrapper to extract the type field
@@ -142,6 +144,7 @@ impl CompletionProvider for OpenRouterProvider {
             input,
             stream: Some(true),
             reasoning,
+            include_reasoning: Some(true),
         };
 
         info!(
@@ -219,7 +222,6 @@ impl CompletionProvider for OpenRouterProvider {
                         continue;
                     }
 
-                    // OpenRouter embeds type in JSON, not in event: lines
                     // Parse the JSON to extract the type field
                     let event_type = current_event_type.clone().or_else(|| {
                         serde_json::from_str::<SseEvent>(data)
@@ -251,7 +253,7 @@ impl CompletionProvider for OpenRouterProvider {
                                 }
                             }
                         }
-                        Some("response.reasoning_summary_text.delta") => {
+                        Some("response.reasoning_summary_text.delta") | Some("response.reasoning_text.delta") => {
                             if let Ok(event) = serde_json::from_str::<SseEvent>(data)
                                 && !event.delta.is_empty()
                             {
@@ -400,12 +402,14 @@ mod tests {
             input: vec![],
             stream: None,
             reasoning: None,
+            include_reasoning: None,
         };
 
         let json = serde_json::to_string(&request).unwrap();
         // None fields should be omitted
         assert!(!json.contains("stream"));
         assert!(!json.contains("reasoning"));
+        assert!(!json.contains("include_reasoning"));
     }
 
     #[test]
@@ -417,6 +421,7 @@ mod tests {
             reasoning: Some(Reasoning {
                 effort: "high",
             }),
+            include_reasoning: Some(true),
         };
 
         let json = serde_json::to_string(&request).unwrap();

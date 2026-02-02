@@ -74,8 +74,13 @@
 //! - [ ] Phase 4: Integration (wire up in main loop)
 //! - [ ] Phase 5: Cleanup (remove old code from ui.rs)
 
-// Re-export components when they're created
-// pub use title_bar::TitleBar;
-// pub use message::Message;
-// pub use message_list::{MessageList, MessageListState};
-// pub use input_box::{InputBox, InputBoxState, InputEvent};
+// Re-export components
+mod title_bar;
+#[allow(unused_imports)] // Used in Phase 4 (integration with main loop)
+pub use title_bar::TitleBar;
+
+pub mod message;
+pub mod input_box;
+pub use input_box::{InputBox, InputEvent};
+pub mod message_list;
+pub use message_list::{MessageList, MessageListState};
