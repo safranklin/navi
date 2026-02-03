@@ -46,11 +46,11 @@ struct ResponsesRequest {
     model: String,
     input: Vec<InputMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    stream: Option<bool>,
+    pub stream: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    reasoning: Option<Reasoning>,
+    pub reasoning: Option<Reasoning>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    include_reasoning: Option<bool>,
+    pub include_reasoning: Option<bool>,
 }
 
 /// Generic SSE event wrapper to extract the type field
@@ -144,7 +144,7 @@ impl CompletionProvider for OpenRouterProvider {
             input,
             stream: Some(true),
             reasoning,
-            include_reasoning: Some(true),
+            include_reasoning: Some(!matches!(request.effort, Effort::None)),
         };
 
         info!(
@@ -153,6 +153,9 @@ impl CompletionProvider for OpenRouterProvider {
             responses_request.input.len(),
             request.effort
         );
+
+        let json_body = serde_json::to_string(&responses_request).unwrap_or_else(|_| "{}".to_string());
+        info!("Raw OpenRouter Request: {}", json_body);
 
         // Make the API request to the Responses endpoint
         let response = self
@@ -402,14 +405,14 @@ mod tests {
             input: vec![],
             stream: None,
             reasoning: None,
-            include_reasoning: None,
+            include_reasoning: Some(false),
         };
 
         let json = serde_json::to_string(&request).unwrap();
-        // None fields should be omitted
+        // None fields should be omitted (except reasoning which we want explicit null)
         assert!(!json.contains("stream"));
-        assert!(!json.contains("reasoning"));
-        assert!(!json.contains("include_reasoning"));
+        assert!(json.contains(r#""reasoning":null"#));
+        assert!(json.contains(r#""include_reasoning":false"#));
     }
 
     #[test]

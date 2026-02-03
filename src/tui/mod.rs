@@ -37,6 +37,8 @@ pub struct TuiState {
     // Persistent component states
     pub message_list: MessageListState,
     pub input_box: InputBox,
+    // Animation state
+    pub pulse_value: f32,
 }
 
 impl TuiState {
@@ -44,6 +46,7 @@ impl TuiState {
         Self {
             message_list: MessageListState::new(),
             input_box: InputBox::new(initial_effort),
+            pulse_value: 0.0,
         }
     }
 }
@@ -99,12 +102,22 @@ pub fn run(provider_choice: Provider) -> std::io::Result<()> {
 
     // Channel for actions from background tasks
     let (tx, rx) = mpsc::channel();
+    
+    // Animation timer
+    let start_time = std::time::Instant::now();
 
     loop {
         // Sync InputBox effort prop with App state
         tui.input_box.effort = app.effort;
+        
+        // Update animation state (sine wave breathing)
+        let elapsed = start_time.elapsed().as_secs_f32();
+        tui.pulse_value = (elapsed * 5.0).sin() * 0.5 + 0.5;
+        
+        // Frame counter for animations (approx 12 fps for spinner/landing)
+        let spinner_frame = (elapsed * 12.0) as usize;
 
-        terminal.draw(|f| ui::draw_ui(f, &app, &mut tui))?;
+        terminal.draw(|f| ui::draw_ui(f, &app, &mut tui, spinner_frame))?;
 
         // Wait for first event (with timeout for background task responsiveness)
         let first_event = poll_event();

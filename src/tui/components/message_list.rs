@@ -67,15 +67,24 @@ pub struct MessageList<'a> {
     pub state: &'a mut MessageListState,
     pub context: &'a Context,
     pub is_loading: bool,
+    pub pulse_value: f32,
+    pub spinner_frame: usize,
 }
 
 impl<'a> MessageList<'a> {
-    pub fn new(state: &'a mut MessageListState, context: &'a Context, is_loading: bool) -> Self {
+    pub fn new(state: &'a mut MessageListState, context: &'a Context, is_loading: bool, pulse_value: f32, spinner_frame: usize) -> Self {
         Self {
             state,
             context,
             is_loading,
+            pulse_value,
+            spinner_frame,
         }
+    }
+
+    fn get_spinner_char(frame: usize) -> &'static str {
+        let frames = ["ʚ(o)ɞ", "-(o)-", ">(o)<", "-(o)-"];
+        frames[frame % frames.len()]
     }
 }
 
@@ -88,7 +97,7 @@ impl<'a> Component for MessageList<'a> {
         // We can access self.state directly because we have &mut self 
         // and self.state is &mut MessageListState
         let layout = &mut self.state.layout;
-        let reusable = layout.reusable_count(num_items, content_width, self.is_loading);
+        let reusable = layout.reusable_count(num_items, content_width, self.is_loading, &self.context.items);
         
         layout.heights.truncate(reusable.min(layout.heights.len()));
         
@@ -98,7 +107,21 @@ impl<'a> Component for MessageList<'a> {
         layout.rebuild_prefix_heights();
         layout.update_metadata(num_items, content_width);
 
-        let total_height: u16 = self.state.layout.heights.iter().sum();
+        let mut total_height: u16 = self.state.layout.heights.iter().sum();
+
+        // Calculate ghost loader height if needed
+        let show_loader = self.is_loading && self.context.items.last().map_or(false, |last| {
+            matches!(last.source, crate::inference::Source::User | crate::inference::Source::Directive)
+        });
+        
+        if show_loader {
+            let spinner = Self::get_spinner_char(self.spinner_frame);
+            let ghost_seg = crate::inference::ContextSegment {
+                source: crate::inference::Source::Thinking,
+                content: format!("{} Thinking...", spinner),
+            };
+            total_height += Message::calculate_height(&ghost_seg, content_width);
+        }
 
          // 2. Calculate visible range
         let scroll_offset = self.state.scroll_state.offset().y;
@@ -124,8 +147,17 @@ impl<'a> Component for MessageList<'a> {
             // Check hover status safely using state
             let is_hovered = self.state.hovered_index == Some(i) && !(is_last && self.is_loading);
             
+            // Only pulse if this is a Model/Thinking message that is actively generating
+            // We never pulse User messages anymore (we show the ghost loader instead)
+            let is_volatile = matches!(seg.source, crate::inference::Source::Model | crate::inference::Source::Thinking);
+            let pulse_intensity = if is_last && self.is_loading && is_volatile { 
+                self.pulse_value 
+            } else { 
+                0.0 
+            };
+
             // Create the transient Message component logic
-            let message = Message::new(seg, is_hovered);
+            let message = Message::new(seg, is_hovered, pulse_intensity);
             
             let segment_rect = Rect::new(0, y_offset, content_width, height);
             
@@ -133,6 +165,32 @@ impl<'a> Component for MessageList<'a> {
             scroll_view.render_widget(message, segment_rect);
             
             y_offset += height;
+        }
+
+        // 4. Render Ghost "Thinking..." Indicator if needed
+        // If we are loading AND the last message is NOT from the model (i.e. we are waiting for first token),
+        // show a temporary item.
+        let show_loader = self.is_loading && self.context.items.last().map_or(false, |last| {
+            matches!(last.source, crate::inference::Source::User | crate::inference::Source::Directive)
+        });
+
+        if show_loader {
+            let spinner = Self::get_spinner_char(self.spinner_frame);
+            let ghost_seg = crate::inference::ContextSegment {
+                source: crate::inference::Source::Thinking,
+                content: format!("{} Thinking...", spinner), // TODO: Make this fancy?
+            };
+            let ghost_height = Message::calculate_height(&ghost_seg, content_width);
+
+            // Only render if within visible range (simple check: if y_offset < scroll + height)
+            let scroll_offset = self.state.scroll_state.offset().y;
+            let viewport_bottom = scroll_offset + area.height;
+            
+            if y_offset < viewport_bottom {
+                let message = Message::new(&ghost_seg, false, self.pulse_value);
+                let segment_rect = Rect::new(0, y_offset, content_width, ghost_height);
+                scroll_view.render_widget(message, segment_rect);
+            }
         }
 
         // Auto-scroll logic (Mutation)
@@ -212,13 +270,31 @@ impl LayoutCache {
         }
     }
 
-    pub fn reusable_count(&self, message_count: usize, content_width: u16, is_loading: bool) -> usize {
-        if self.content_width != content_width || self.heights.is_empty() || message_count < self.message_count {
-            0
-        } else if is_loading {
-            if message_count == 0 { 0 } else { message_count - 1 }
+    pub fn reusable_count(&self, message_count: usize, content_width: u16, is_loading: bool, items: &[crate::inference::ContextSegment]) -> usize {
+        if self.content_width != content_width || self.heights.is_empty() {
+            return 0;
+        }
+
+        // If we have FEWER messages than cached, we must have cleared context -> invalid
+        if message_count < self.message_count {
+            return 0;
+        }
+
+        // If not loading, everything essentially stable up to the count
+        if !is_loading {
+            return message_count;
+        }
+
+        // If loading, check if the last message is volatile (Model/Thinking)
+        // If the last message is User/System, it's stable, so we don't need to invalidate it.
+        if let Some(last) = items.last() {
+            match last.source {
+                crate::inference::Source::User | crate::inference::Source::Directive => message_count,
+                 _ => if message_count == 0 { 0 } else { message_count - 1 }
+            }
         } else {
-            message_count
+             // Fallback
+             if message_count == 0 { 0 } else { message_count - 1 }
         }
     }
 
@@ -260,16 +336,28 @@ mod tests {
         cache.heights = vec![1; 5]; // Simulating 5 messages of height 1
 
         // Case 1: Same everything -> All reusable
-        assert_eq!(cache.reusable_count(5, 80, false), 5);
+        assert_eq!(cache.reusable_count(5, 80, false, &[]), 5);
         
         // Case 2: New message added -> 6 reusable (will be clamped by truncate)
-        assert_eq!(cache.reusable_count(6, 80, false), 6);
+        assert_eq!(cache.reusable_count(6, 80, false, &[]), 6);
 
         // Case 3: Width changed -> 0 reusable
-        assert_eq!(cache.reusable_count(5, 40, false), 0);
+        assert_eq!(cache.reusable_count(5, 40, false, &[]), 0);
         
-        // Case 4: Loading (last message might change) -> n-1 reusable
-        cache.update_metadata(5, 80);
-        assert_eq!(cache.reusable_count(5, 80, true), 4);
+        // Case 4: Loading (last message is volatile) -> n-1 reusable
+        let volatile_items = vec![crate::inference::ContextSegment {
+             source: crate::inference::Source::Model,
+             content: String::new()
+        }];
+        cache.update_metadata(1, 80);
+        assert_eq!(cache.reusable_count(1, 80, true, &volatile_items), 0);
+
+        // Case 5: Loading (last message is stable) -> n reusable
+        let stable_items = vec![crate::inference::ContextSegment {
+             source: crate::inference::Source::User,
+             content: String::new()
+        }];
+        cache.update_metadata(1, 80);
+        assert_eq!(cache.reusable_count(1, 80, true, &stable_items), 1);
     }
 }

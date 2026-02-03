@@ -66,7 +66,8 @@ impl Component for InputBox {
         let title = format!("Input (Reasoning: {})", self.effort.label());
         
         let input = Paragraph::new(self.buffer.as_str())
-            .block(Block::bordered().title(title));
+            .block(Block::bordered().border_type(ratatui::widgets::BorderType::Rounded).title(title))
+            .style(ratatui::style::Style::default().fg(ratatui::style::Color::Green));
         
         frame.render_widget(input, area);
     }

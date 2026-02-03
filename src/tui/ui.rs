@@ -8,7 +8,7 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::widgets::{Block, Paragraph}; 
 use ratatui::layout::Alignment;
 
-pub fn draw_ui(frame: &mut Frame, app: &App, tui: &mut TuiState) {
+pub fn draw_ui(frame: &mut Frame, app: &App, tui: &mut TuiState, spinner_frame: usize) {
     use Constraint::{Length, Min};
     let layout = Layout::vertical([Length(1), Min(0), Length(3)]);
     let [title_area, main_area, input_area] = layout.areas(frame.area());
@@ -16,14 +16,27 @@ pub fn draw_ui(frame: &mut Frame, app: &App, tui: &mut TuiState) {
     // 1. Render Main Area (MessageList or Error)
     // We render this first. Since MessageList::render takes &mut self,
     // it will update the cached layout inside tui.message_list (TuiState).
+    // it will update the cached layout inside tui.message_list (TuiState).
+    
+    // Check if there are any user-visible messages (User or Model)
+    let has_visible_messages = app.context.items.iter().any(|item| 
+        matches!(item.source, crate::inference::Source::User | crate::inference::Source::Model)
+    );
+
     if let Some(error_msg) = &app.error {
         draw_error_view(frame, main_area, error_msg);
+    } else if !has_visible_messages {
+        // Render Landing Page
+        let mut landing = crate::tui::components::LandingPage::new(spinner_frame);
+        landing.render(frame, main_area);
     } else {
         // Create MessageList wrapper around mutable persistent state
         let mut message_list = MessageList::new(
             &mut tui.message_list, // &mut MessageListState
             &app.context,
-            app.is_loading
+            app.is_loading,
+            tui.pulse_value,
+            spinner_frame,
         );
         // Mutable render call updates layout cache and renders to scroll view
         message_list.render(frame, main_area);

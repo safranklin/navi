@@ -36,16 +36,19 @@ pub struct Message<'a> {
     pub segment: &'a ContextSegment,
     /// Whether this message is currently under the cursor
     pub is_hovered: bool,
+    /// Current pulse intensity (0.0 to 1.0) for active generation animation
+    pub pulse_intensity: f32,
 }
 
 impl<'a> Message<'a> {
     /// Creates a new Message component for rendering.
     ///
     /// This is typically called within `MessageList::render()` for each visible segment.
-    pub fn new(segment: &'a ContextSegment, is_hovered: bool) -> Self {
+    pub fn new(segment: &'a ContextSegment, is_hovered: bool, pulse_intensity: f32) -> Self {
         Self {
             segment,
             is_hovered,
+            pulse_intensity,
         }
     }
 
@@ -89,22 +92,33 @@ impl<'a> Widget for Message<'a> {
 
         let style = match self.segment.source {
             Source::Directive => Style::default().fg(Color::Yellow),
-            Source::User => Style::default().fg(Color::Cyan),
-            Source::Model => Style::default().fg(Color::Green),
+            Source::User => Style::default().fg(Color::Green),
+            Source::Model => Style::default().fg(Color::Blue),
             Source::Thinking => Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
         };
 
         // Hover effect overlays background
-        let (style, border_style) = if self.is_hovered {
+        let (style, mut border_style) = if self.is_hovered {
             (style.bg(Color::DarkGray), style)
         } else {
             (style, style.add_modifier(Modifier::DIM))
         };
 
+        // Pulse animation if generating
+        if self.pulse_intensity > 0.0 {
+             // 3-stage breathing effect
+             if self.pulse_intensity > 0.6 {
+                 border_style = border_style.add_modifier(Modifier::BOLD).fg(Color::White);
+             } else if self.pulse_intensity > 0.2 {
+                 border_style = border_style.fg(Color::Gray);
+             }
+        }
+
         let content = self.segment.content.trim();
         let paragraph = Paragraph::new(content)
             .block(Block::bordered()
                 .title(role)
+                .border_type(ratatui::widgets::BorderType::Rounded)
                 .border_style(border_style)
                 .title_style(border_style))
             .style(style)
@@ -201,17 +215,17 @@ mod tests {
     // ==========================================================================
 
     #[test]
-    fn style_user_is_cyan() {
+    fn style_user_is_green() {
         let segment = make_segment(Source::User, "test");
         let style = get_source_style(&segment.source);
-        assert_eq!(style.fg, Some(Color::Cyan));
+        assert_eq!(style.fg, Some(Color::Green));
     }
 
     #[test]
-    fn style_model_is_green() {
+    fn style_model_is_blue() {
         let segment = make_segment(Source::Model, "test");
         let style = get_source_style(&segment.source);
-        assert_eq!(style.fg, Some(Color::Green));
+        assert_eq!(style.fg, Some(Color::Blue));
     }
 
     #[test]
@@ -233,8 +247,8 @@ mod tests {
     fn get_source_style(source: &Source) -> Style {
         match source {
             Source::Directive => Style::default().fg(Color::Yellow),
-            Source::User => Style::default().fg(Color::Cyan),
-            Source::Model => Style::default().fg(Color::Green),
+            Source::User => Style::default().fg(Color::Green),
+            Source::Model => Style::default().fg(Color::Blue),
             Source::Thinking => Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
         }
     }
