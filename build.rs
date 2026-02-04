@@ -12,7 +12,6 @@ fn main() {
 
     let asset_dir = Path::new("assets");
     if !asset_dir.exists() {
-        // If no assets, just write an empty array to avoid build failure
         writeln!(f, "const ASCII_FRAMES: &[&str] = &[];").unwrap();
         return;
     }
@@ -23,99 +22,119 @@ fn main() {
         .filter(|path| path.extension().map_or(false, |ext| ext == "txt"))
         .collect();
 
-    // Sort to ensure frame order
     entries.sort();
 
-    // Pass 1: Find the Global Vertical Padding (Top/Bottom)
-    // We want to find the *minimum* number of empty lines at the top and bottom shared by ALL frames.
-    // We will strip this "global padding" from every frame.
-    // This preserves the relative vertical animation (jumping up and down) while removing the static letterboxing.
+    // Braille Dot Map (ISO 11548-1)
+    // 1 4
+    // 2 5
+    // 3 6
+    // 7 8
+    fn get_dots(c: char) -> Vec<(f64, f64)> {
+        let code = c as u32;
+        let mut points = Vec::new();
+        if !(0x2800..=0x28FF).contains(&code) { return points; }
+        
+        let pattern = code - 0x2800;
+        
+        // (dx, dy)
+        let offsets = [
+            (0x01, 0.0, 0.0), // Dot 1
+            (0x02, 0.0, 1.0), // Dot 2
+            (0x04, 0.0, 2.0), // Dot 3
+            (0x08, 1.0, 0.0), // Dot 4
+            (0x10, 1.0, 1.0), // Dot 5
+            (0x20, 1.0, 2.0), // Dot 6
+            (0x40, 0.0, 3.0), // Dot 7
+            (0x80, 1.0, 3.0), // Dot 8
+        ];
 
-    let is_blank = |line: &str| line.chars().all(|c| c == ' ' || c == '⠀');
-    
-    let mut global_top_padding = usize::MAX;
-    let mut global_bottom_padding = usize::MAX;
-
-    for path in &entries {
-        let content = fs::read_to_string(path).unwrap();
-        let lines: Vec<&str> = content.lines().collect();
-        
-        // Find top padding for this frame
-        let mut top = 0;
-        for line in &lines {
-            if is_blank(line) { top += 1; } else { break; }
-        }
-        
-        // Find bottom padding for this frame
-        let mut bottom = 0;
-        for line in lines.iter().rev() {
-            if is_blank(line) { bottom += 1; } else { break; }
-        }
-        
-        // Update global minimums
-        if top < global_top_padding { global_top_padding = top; }
-        if bottom < global_bottom_padding { global_bottom_padding = bottom; }
-    }
-    
-    // Pass 1.5: Find Global Max Width of content (to ensure consistent centering)
-    // If lines have different lengths, Ratatui's Alignment::Center will shift them relative to each other,
-    // destroying the internal alignment of the art.
-    // We must pad all lines to the same width.
-    
-    let mut global_max_width = 0;
-    
-    for path in &entries {
-        let content = fs::read_to_string(path).unwrap();
-        let lines: Vec<&str> = content.lines().collect();
-        
-        let start = global_top_padding;
-        let end = lines.len().saturating_sub(global_bottom_padding);
-        
-        if start < end && start < lines.len() {
-            for line in &lines[start..end] {
-                // We use trim_end matches for calculation to see "intended" width
-                // including leading spaces but ignoring right-side padding
-                let trimmed = line.trim_end_matches(|c| c == ' ' || c == '⠀');
-                let width = trimmed.chars().count();
-                if width > global_max_width { global_max_width = width; }
+        for (mask, dx, dy) in offsets {
+            if pattern & mask != 0 {
+                points.push((dx, dy));
             }
         }
+        points
     }
 
-    writeln!(f, "const ASCII_FRAMES: &[&str] = &[").unwrap();
+    writeln!(f, "pub const LANDING_FRAMES: &[&[(f64, f64)]] = &[").unwrap();
+    
+    let mut global_min_x = f64::MAX;
+    let mut global_max_x = f64::MIN;
+    let mut global_min_y = f64::MAX;
+    let mut global_max_y = f64::MIN;
+
+    // We process paths to strings first to hold data
+    struct FrameData {
+        points: Vec<(f64, f64)>,
+    }
+    let mut frames_data = Vec::new();
 
     for path in entries {
         let content = fs::read_to_string(&path).unwrap();
-        let lines: Vec<&str> = content.lines().collect();
-        let mut processed_lines = Vec::new();
-
-        let start = global_top_padding;
-        let end = lines.len().saturating_sub(global_bottom_padding);
+        let mut points = Vec::new();
         
-        if start < end && start < lines.len() {
-            for line in &lines[start..end] {
-                let trimmed = line.trim_end_matches(|c| c == ' ' || c == '⠀');
-                let mut padded = trimmed.to_string();
-                
-                // Pad to global_max_width to preserve alignment block
-                while padded.chars().count() < global_max_width {
-                    padded.push(' ');
-                }
-                
-                processed_lines.push(padded);
+        for (row, line) in content.lines().enumerate() {
+            // Remove BOM or weird chars if any (though Rust strings are UTF-8)
+            // The file might contain spaces for padding. 
+            // Spaces are NOT braille, so they add partial width but no dots.
+            // But we operate on Grid.
+            
+            for (col, c) in line.chars().enumerate() {
+               let dot_offsets = get_dots(c);
+               for (dx, dy) in dot_offsets {
+                   let x = (col as f64) * 2.0 + dx;
+                   let y = (row as f64) * 4.0 + dy;
+                   // Flip Y? Canvas usually has Y going up?
+                   // No, Ratatui Canvas coordinates: (0,0) is usually bottom-left?
+                   // Depends on x_bounds / y_bounds.
+                   // Let's assume standard image coords (y down) and flip in render or setting bounds.
+                   // Actually, BrailleCanvas usually draws mathematically (Y up).
+                   // Let's just store "Image Coords" (Y Down) here: 0 is top.
+                   // When rendering, we can map Top (0) to Top of widget.
+                   
+                   points.push((x, y));
+                   
+                   if x < global_min_x { global_min_x = x; }
+                   if x > global_max_x { global_max_x = x; }
+                   if y < global_min_y { global_min_y = y; }
+                   if y > global_max_y { global_max_y = y; }
+               }
             }
         }
-
-        // Escape for Rust string literal
-        let mut final_parts = Vec::new();
-        for line in processed_lines {
-            let escaped = line.replace('\\', "\\\\").replace('"', "\\\"");
-            final_parts.push(escaped);
-        }
-        let final_str = final_parts.join("\\n");
-        
-        writeln!(f, "    \"{}\",", final_str).unwrap();
+        frames_data.push(FrameData { points });
     }
+    
+    let mut total_x_sum: f64 = 0.0;
+    let mut total_points_count: usize = 0;
 
+    for frame in &frames_data {
+        write!(f, "    &[").unwrap();
+        for (x, y) in &frame.points {
+             // Normalized coordinates
+             let norm_x = x - global_min_x;
+             let norm_y = y - global_min_y;
+             
+             write!(f, "({:.1}, {:.1}), ", norm_x, norm_y).unwrap();
+             
+             total_x_sum += norm_x;
+             total_points_count += 1;
+        }
+        writeln!(f, "],").unwrap();
+    }
+    
     writeln!(f, "];").unwrap();
+    
+    let width = global_max_x - global_min_x;
+    let height = global_max_y - global_min_y;
+    
+    let center_of_mass_x = if total_points_count > 0 {
+        total_x_sum / (total_points_count as f64)
+    } else {
+        width / 2.0
+    };
+    
+    writeln!(f, "pub const FAIRY_WIDTH: f64 = {:.1};", width).unwrap();
+    writeln!(f, "pub const FAIRY_HEIGHT: f64 = {:.1};", height).unwrap();
+    writeln!(f, "pub const FAIRY_COM_X: f64 = {:.2};", center_of_mass_x).unwrap();
+
 }
