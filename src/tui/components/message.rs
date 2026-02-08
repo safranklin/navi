@@ -1,10 +1,22 @@
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::widgets::{Block, Paragraph, Widget, Wrap};
+use ratatui::widgets::{Block, Padding, Paragraph, Widget, Wrap};
 use ratatui::Frame;
 
 use crate::inference::{ContextSegment, Source};
 use crate::tui::component::Component;
+
+/// Horizontal padding (per side) between the border and text content.
+const CONTENT_PAD_H: u16 = 1;
+/// Total horizontal space consumed by borders (1 left + 1 right) and padding.
+const HORIZONTAL_OVERHEAD: u16 = 2 + CONTENT_PAD_H * 2;
+/// Total vertical space consumed by borders (1 top + 1 bottom).
+const VERTICAL_OVERHEAD: u16 = 2;
+
+/// Pulse intensity threshold above which the border transitions from normal to BOLD.
+const PULSE_BOLD_THRESHOLD: f32 = 0.6;
+/// Pulse intensity threshold above which the border transitions from DIM to normal.
+const PULSE_NORMAL_THRESHOLD: f32 = 0.2;
 
 /// A stateless component that renders a single chat message with source-based styling.
 ///
@@ -63,20 +75,23 @@ impl<'a> Message<'a> {
     /// The wrapping options must match the `Ratatui` default for `Paragraph`
     /// to ensure 1:1 mapping between calculated and actual height.
     pub fn calculate_height(segment: &ContextSegment, width: u16) -> u16 {
-        let content_width = width.saturating_sub(2); // Subtract border padding
+        let content_width = width.saturating_sub(HORIZONTAL_OVERHEAD);
         if content_width == 0 {
+            // Degenerate case: terminal too narrow for borders + padding.
+            // Return 1 row so the message still occupies space in the layout.
             return 1;
         }
 
         let content = segment.content.trim();
-        if content.is_empty() { return 2; }
+        if content.is_empty() { return VERTICAL_OVERHEAD; }
 
         let options = textwrap::Options::new(content_width as usize)
-            .break_words(true) // Ratatui breaks words by default in Wrap { trim: true }
-            .word_separator(textwrap::WordSeparator::AsciiSpace); // Matches standard behavior
+            .break_words(true)
+            .word_separator(textwrap::WordSeparator::AsciiSpace);
 
         let lines = textwrap::wrap(content, options);
-        (lines.len() as u16).max(1) + 2 // Content lines + 2 for borders
+        // Ensure at least 1 content line even if textwrap returns empty
+        (lines.len() as u16).max(1) + VERTICAL_OVERHEAD
     }
 }
 
@@ -99,34 +114,40 @@ impl<'a> Widget for Message<'a> {
             Source::Status => Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
         };
 
-        // Hover effect overlays background
-        let (style, mut border_style) = if self.is_hovered {
-            (style.bg(Color::DarkGray), style)
+        // Hover effect: text always readable, border brightens on hover
+        let mut border_style = if self.is_hovered {
+            style
         } else {
-            (style, style.add_modifier(Modifier::DIM))
+            style.add_modifier(Modifier::DIM)
         };
 
         // Pulse animation if generating
-        // Breathe between DIM → normal → BOLD using the source's own color
-        if self.pulse_intensity > 0.0 {
-             if self.pulse_intensity > 0.6 {
-                 border_style = border_style.remove_modifier(Modifier::DIM).add_modifier(Modifier::BOLD);
-             } else if self.pulse_intensity > 0.2 {
-                 border_style = border_style.remove_modifier(Modifier::DIM);
-             }
+        // Three-phase breathing: DIM → normal → BOLD using the source's own color
+        if self.pulse_intensity > PULSE_BOLD_THRESHOLD {
+            border_style = border_style.remove_modifier(Modifier::DIM).add_modifier(Modifier::BOLD);
+        } else if self.pulse_intensity > PULSE_NORMAL_THRESHOLD {
+            border_style = border_style.remove_modifier(Modifier::DIM);
         }
 
         let content = self.segment.content.trim();
+
+        // Render the block into `area`, then the paragraph into the inner rect.
+        let block = Block::bordered()
+            .title(role)
+            .border_type(ratatui::widgets::BorderType::Rounded)
+            .border_style(border_style)
+            .title_style(border_style)
+            .padding(Padding::horizontal(CONTENT_PAD_H));
+
+        // Get the inner area of the block where the paragraph will be rendered
+        let inner_area = block.inner(area);
+        block.render(area, buf);
+
         let paragraph = Paragraph::new(content)
-            .block(Block::bordered()
-                .title(role)
-                .border_type(ratatui::widgets::BorderType::Rounded)
-                .border_style(border_style)
-                .title_style(border_style))
             .style(style)
             .wrap(Wrap { trim: true });
-        
-        paragraph.render(area, buf);
+
+        paragraph.render(inner_area, buf);
     }
 }
 
@@ -161,55 +182,52 @@ mod tests {
     #[test]
     fn calculate_height_empty_content_returns_border_height() {
         let segment = make_segment(Source::User, "");
-        // Empty content should still have 2 lines for top/bottom borders
-        assert_eq!(Message::calculate_height(&segment, 80), 2);
+        // Empty content → just VERTICAL_OVERHEAD (top + bottom borders)
+        assert_eq!(Message::calculate_height(&segment, 80), VERTICAL_OVERHEAD);
     }
 
     #[test]
     fn calculate_height_whitespace_only_treated_as_empty() {
         let segment = make_segment(Source::User, "   \n\t  ");
-        // Whitespace-only content is trimmed to empty
-        assert_eq!(Message::calculate_height(&segment, 80), 2);
+        // Whitespace-only content is trimmed to empty → VERTICAL_OVERHEAD
+        assert_eq!(Message::calculate_height(&segment, 80), VERTICAL_OVERHEAD);
     }
 
     #[test]
     fn calculate_height_zero_width_returns_minimum() {
         let segment = make_segment(Source::User, "Hello world");
-        // Width 0 means no room for content
+        // Width 0: no room for borders + padding → degenerate fallback of 1 row
         assert_eq!(Message::calculate_height(&segment, 0), 1);
     }
 
     #[test]
-    fn calculate_height_width_equals_border_returns_minimum() {
+    fn calculate_height_width_equals_overhead_returns_minimum() {
         let segment = make_segment(Source::User, "Hello world");
-        // Width 2 exactly covers borders, leaving content_width = 0
-        assert_eq!(Message::calculate_height(&segment, 2), 1);
+        // Width == HORIZONTAL_OVERHEAD: content_width = 0 → degenerate fallback
+        assert_eq!(Message::calculate_height(&segment, HORIZONTAL_OVERHEAD), 1);
     }
 
     #[test]
     fn calculate_height_single_line_fits() {
         let segment = make_segment(Source::User, "Hello");
-        // 5 chars + 2 border = need width 7+ for single line
-        // With width 80, content_width = 78, easily fits
-        assert_eq!(Message::calculate_height(&segment, 80), 3); // 1 line + 2 borders
+        // "Hello" (5 chars) fits in width 80 - HORIZONTAL_OVERHEAD = 76
+        assert_eq!(Message::calculate_height(&segment, 80), 1 + VERTICAL_OVERHEAD);
     }
 
     #[test]
     fn calculate_height_wraps_at_width_boundary() {
         let segment = make_segment(Source::User, "Hello world");
-        // "Hello world" = 11 chars
-        // Width 7 means content_width = 5
-        // "Hello" (5) on line 1, "world" (5) on line 2
-        assert_eq!(Message::calculate_height(&segment, 7), 4); // 2 lines + 2 borders
+        // "Hello world" = 11 chars, width 9 → content_width = 5
+        // Wraps to: "Hello" | "world" = 2 lines
+        assert_eq!(Message::calculate_height(&segment, 9), 2 + VERTICAL_OVERHEAD);
     }
 
     #[test]
     fn calculate_height_breaks_long_words() {
         let segment = make_segment(Source::User, "abcdefghij");
-        // "abcdefghij" = 10 chars, no spaces
-        // Width 6 means content_width = 4
-        // With break_words(true): "abcd" | "efgh" | "ij" = 3 lines
-        assert_eq!(Message::calculate_height(&segment, 6), 5); // 3 lines + 2 borders
+        // "abcdefghij" = 10 chars, width 8 → content_width = 4
+        // Breaks to: "abcd" | "efgh" | "ij" = 3 lines
+        assert_eq!(Message::calculate_height(&segment, 8), 3 + VERTICAL_OVERHEAD);
     }
 
     // ==========================================================================
