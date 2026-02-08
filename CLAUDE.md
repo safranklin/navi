@@ -14,6 +14,10 @@ It serves three purposes:
 
 3. **An AI experimentation testbed.** Exploring agentic tool use, persistent memory systems, and knowledge graphs that evolve with use.
 
+## Commit Style
+
+Conventional commits: `type(scope): description` (e.g. `refactor(tui):`, `feat(inference):`). Body explains the "why."
+
 ## Build Commands
 
 ```bash
@@ -31,7 +35,7 @@ Rust project using the 2024 edition. Structure:
 
 - `src/main.rs`: Entry point
 - `src/tui/`: UI rendering, event handling, terminal management (Ratatui)
-- `src/api/`: External API integrations (LLM providers, HTTP clients)
+- `src/inference/`: LLM provider integrations (OpenRouter, LM Studio), context/message types
 - `src/core/`: Core business logic, domain models, state management
 
 ## How We Work
@@ -43,5 +47,7 @@ This is a learning project. The human writes code; Claude reviews and teaches.
 3. **Tests and docs.** Human writes first pass, Claude reviews and improves.
 4. **Push back.** If an approach seems wrong or overcomplicated, say so directly.
 5. **Reflect.** After significant work, prompt the human to consolidate what they learned.
+
+**Enforcement:** If the human asks Claude to make a small edit (adding match arms, threading parameters, etc.), Claude should describe the change and let the human implement it. Small edits build compiler fluency.
 
 See the global `~/.claude/CLAUDE.md` for the full philosophy.
