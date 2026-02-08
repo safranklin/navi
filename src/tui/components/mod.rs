@@ -85,4 +85,5 @@ pub use input_box::{InputBox, InputEvent};
 pub mod message_list;
 pub use message_list::{MessageList, MessageListState};
 pub mod landing;
+pub mod logo;
 pub use landing::LandingPage;

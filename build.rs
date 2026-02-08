@@ -56,7 +56,7 @@ fn main() {
         points
     }
 
-    writeln!(f, "pub const LANDING_FRAMES: &[&[(f64, f64)]] = &[").unwrap();
+    writeln!(f, "pub const LOGO_FRAMES: &[&[(f64, f64)]] = &[").unwrap();
     
     let mut global_min_x = f64::MAX;
     let mut global_max_x = f64::MIN;
@@ -133,8 +133,8 @@ fn main() {
         width / 2.0
     };
     
-    writeln!(f, "pub const FAIRY_WIDTH: f64 = {:.1};", width).unwrap();
-    writeln!(f, "pub const FAIRY_HEIGHT: f64 = {:.1};", height).unwrap();
-    writeln!(f, "pub const FAIRY_COM_X: f64 = {:.2};", center_of_mass_x).unwrap();
+    writeln!(f, "pub const LOGO_WIDTH: f64 = {:.1};", width).unwrap();
+    writeln!(f, "pub const LOGO_HEIGHT: f64 = {:.1};", height).unwrap();
+    writeln!(f, "pub const LOGO_COM_X: f64 = {:.2};", center_of_mass_x).unwrap();
 
 }
