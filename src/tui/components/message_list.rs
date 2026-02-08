@@ -68,23 +68,30 @@ pub struct MessageList<'a> {
     pub context: &'a Context,
     pub is_loading: bool,
     pub pulse_value: f32,
-    pub spinner_frame: usize,
 }
 
 impl<'a> MessageList<'a> {
-    pub fn new(state: &'a mut MessageListState, context: &'a Context, is_loading: bool, pulse_value: f32, spinner_frame: usize) -> Self {
+    pub fn new(state: &'a mut MessageListState, context: &'a Context, is_loading: bool, pulse_value: f32) -> Self {
         Self {
             state,
             context,
             is_loading,
             pulse_value,
-            spinner_frame,
         }
     }
 
-    fn get_spinner_char(frame: usize) -> &'static str {
-        let frames = ["ʚ(o)ɞ", "-(o)-", ">(o)<", "-(o)-"];
-        frames[frame % frames.len()]
+    /// Build the ghost "preparing" segment shown while waiting for first token.
+    /// Dot count breathes with pulse_value (sine wave): . → .. → ... → .. → .
+    fn ghost_segment(&self) -> crate::inference::ContextSegment {
+        let dots = match self.pulse_value {
+            v if v > 0.66 => "...",
+            v if v > 0.33 => "..",
+            _ => ".",
+        };
+        crate::inference::ContextSegment {
+            source: crate::inference::Source::Status,
+            content: format!("Preparing{dots}"),
+        }
     }
 }
 
@@ -115,11 +122,7 @@ impl<'a> Component for MessageList<'a> {
         });
         
         if show_loader {
-            let spinner = Self::get_spinner_char(self.spinner_frame);
-            let ghost_seg = crate::inference::ContextSegment {
-                source: crate::inference::Source::Thinking,
-                content: format!("{} Thinking...", spinner),
-            };
+            let ghost_seg = self.ghost_segment();
             total_height += Message::calculate_height(&ghost_seg, content_width);
         }
 
@@ -149,7 +152,7 @@ impl<'a> Component for MessageList<'a> {
             
             // Only pulse if this is a Model/Thinking message that is actively generating
             // We never pulse User messages anymore (we show the ghost loader instead)
-            let is_volatile = matches!(seg.source, crate::inference::Source::Model | crate::inference::Source::Thinking);
+            let is_volatile = matches!(seg.source, crate::inference::Source::Model | crate::inference::Source::Thinking | crate::inference::Source::Status);
             let pulse_intensity = if is_last && self.is_loading && is_volatile { 
                 self.pulse_value 
             } else { 
@@ -175,11 +178,7 @@ impl<'a> Component for MessageList<'a> {
         });
 
         if show_loader {
-            let spinner = Self::get_spinner_char(self.spinner_frame);
-            let ghost_seg = crate::inference::ContextSegment {
-                source: crate::inference::Source::Thinking,
-                content: format!("{} Thinking...", spinner), // TODO: Make this fancy?
-            };
+            let ghost_seg = self.ghost_segment();
             let ghost_height = Message::calculate_height(&ghost_seg, content_width);
 
             // Only render if within visible range (simple check: if y_offset < scroll + height)

@@ -88,6 +88,7 @@ impl<'a> Widget for Message<'a> {
             Source::Model => "navi",
             Source::Directive => "system",
             Source::Thinking => "thought",
+            Source::Status => "navi",
         };
 
         let style = match self.segment.source {
@@ -95,6 +96,7 @@ impl<'a> Widget for Message<'a> {
             Source::User => Style::default().fg(Color::Green),
             Source::Model => Style::default().fg(Color::Blue),
             Source::Thinking => Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+            Source::Status => Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
         };
 
         // Hover effect overlays background
@@ -105,12 +107,12 @@ impl<'a> Widget for Message<'a> {
         };
 
         // Pulse animation if generating
+        // Breathe between DIM → normal → BOLD using the source's own color
         if self.pulse_intensity > 0.0 {
-             // 3-stage breathing effect
              if self.pulse_intensity > 0.6 {
-                 border_style = border_style.add_modifier(Modifier::BOLD).fg(Color::White);
+                 border_style = border_style.remove_modifier(Modifier::DIM).add_modifier(Modifier::BOLD);
              } else if self.pulse_intensity > 0.2 {
-                 border_style = border_style.fg(Color::Gray);
+                 border_style = border_style.remove_modifier(Modifier::DIM);
              }
         }
 
@@ -249,7 +251,7 @@ mod tests {
             Source::Directive => Style::default().fg(Color::Yellow),
             Source::User => Style::default().fg(Color::Green),
             Source::Model => Style::default().fg(Color::Blue),
-            Source::Thinking => Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+            Source::Thinking | Source::Status => Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
         }
     }
 }

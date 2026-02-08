@@ -10,6 +10,9 @@ pub enum Source {
     Directive,
     #[serde(rename = "thought")]
     Thinking,
+    /// UI-only status indicator (e.g. "Preparing..."). Never sent to the model.
+    #[serde(rename = "status")]
+    Status,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]

@@ -79,7 +79,7 @@ fn context_to_input(context: &Context) -> Vec<InputMessage> {
                 Source::Directive => Some(Role::System),
                 Source::User => Some(Role::User),
                 Source::Model => Some(Role::Assistant),
-                Source::Thinking => None, // Skip Thinking items
+                Source::Thinking | Source::Status => None, // Skip non-conversational items
             }
             .map(|role| InputMessage {
                 role,
