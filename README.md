@@ -1,20 +1,22 @@
 # Navi
 
-A model-agnostic AI assistant built in Rust. Personality, memory, and context live locally — not with the provider.
+A model-agnostic agent harness built in Rust. Context, memory, and personality live on your machine — not in a megacorp's cloud.
 
-The ultimate dogfooding project. Building my own AI harness to understand it completely, experiment with what works, and have full control over the interface. No black boxes.
+I use tools like Claude Code and OpenCode daily and wanted to understand how they actually work. Navi is the result: building my own agent harness from scratch to pull apart the ideas — context engineering, tool orchestration, persistent memory — and try my own out. No black boxes.
 
 Named after Navi from Ocarina of Time.
+
+![Navi demo](docs/demo.gif)
 
 ## Why
 
 Navi exists for three reasons:
 
-1. **A ground-up model interface.** Building an LLM harness from scratch to deeply understand how these systems work.
+1. **A ground-up agent harness.** Building the scaffolding around LLMs from scratch — context management, tool execution, memory systems — to understand how tools like Claude Code and OpenCode work under the hood.
 
 2. **A local-first platform.** Data stays on your machine, not in a megacorp's cloud.
 
-3. **An AI experimentation testbed.** Exploring agentic tool use, persistent memory systems, and knowledge graphs that evolve with use.
+3. **An experimentation testbed.** A place to try ideas out: agentic tool use, persistent memory, knowledge graphs, and see what actually works.
 
 ## Quick Start
 
