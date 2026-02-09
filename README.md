@@ -1,6 +1,6 @@
 # Navi
 
-A model-agnostic AI assistant built in Rust. Personality, memory, and context live locally... not with the provider.
+A model-agnostic AI assistant built in Rust. Personality, memory, and context live locally — not with the provider.
 
 The ultimate dogfooding project. Building my own AI harness to understand it completely, experiment with what works, and have full control over the interface. No black boxes.
 
@@ -24,7 +24,7 @@ git clone <repo-url> && cd navi
 
 # 2. Set up environment
 cp .env.example .env
-# Edit .env with your OpenRouter API key and model
+# Edit .env with your API key and model
 
 # 3. Run
 cargo run
@@ -32,41 +32,88 @@ cargo run
 
 ## Configuration
 
-Create a `.env` file with:
+Create a `.env` file (or copy `.env.example`):
 
 ```
 OPENROUTER_API_KEY=your-key-here
 PRIMARY_MODEL_NAME=anthropic/claude-sonnet-4
 ```
 
-Get an API key at [openrouter.ai](https://openrouter.ai/).
+### Providers
+
+Navi supports multiple LLM backends, selected via CLI flag:
+
+```bash
+cargo run                          # OpenRouter (default)
+cargo run -- --provider lmstudio   # LM Studio (local)
+cargo run -- -p lmstudio           # Short form
+```
+
+| Provider | Description | Auth |
+|----------|-------------|------|
+| **OpenRouter** | Cloud gateway to many models ([openrouter.ai](https://openrouter.ai/)) | `OPENROUTER_API_KEY` env var |
+| **LM Studio** | Local inference server (v0.3.29+) | None (local) |
+
+LM Studio connects to `http://localhost:1234/v1` by default. Override with `LM_STUDIO_BASE_URL`.
+
+Both providers use the Responses API with SSE streaming.
+
+### Reasoning Effort
+
+Controls how much the model reasons before responding. Cycle with `Ctrl+R`:
+
+**Auto** → Low → Medium → High → Off → Auto
+
+- **Auto** (default): Model decides whether and how much to reason.
+- **Low/Medium/High**: Explicit reasoning effort levels.
+- **Off**: Disables reasoning entirely.
 
 ## Controls
 
 | Key | Action |
 |-----|--------|
 | `Enter` | Send message |
+| `Ctrl+J` | Insert newline |
 | `Esc` | Quit |
-| `↑` / `↓` | Scroll |
-| `Page Up` / `Page Down` | Scroll faster |
-| `End` | Jump to bottom (re-enables auto-scroll) |
-| `Ctrl+T` | Cycle reasoning effort (None → Low → Medium → High) |
+| `←` `→` `↑` `↓` | Move cursor |
+| `Home` / `End` | Jump to start/end of line |
+| `Backspace` / `Delete` | Delete characters |
+| `Ctrl+R` | Cycle reasoning effort |
+| `Page Up` / `Page Down` | Scroll messages |
+| `Mouse wheel` | Scroll messages |
+
+Bracketed paste is supported — paste multi-line text and newlines are preserved.
 
 ## Project Structure
 
 ```
 src/
-├── main.rs          # Entry point, logger setup
-├── api/             # LLM provider integration
-│   ├── client.rs    # OpenRouter streaming client
-│   └── types.rs     # Request/response types
-├── core/            # Pure business logic (no I/O, no UI)
-│   ├── state.rs     # App state
-│   └── action.rs    # Action enum + update() reducer
-└── tui/             # Terminal UI adapter
-    ├── mod.rs       # Event loop, layout caching
-    ├── event.rs     # Input event handling
-    └── ui.rs        # Rendering
+├── main.rs                       # Entry point, CLI args, logger setup
+├── lib.rs                        # Library root, Provider enum
+├── core/                         # Pure business logic (no I/O)
+│   ├── state.rs                  # App state
+│   └── action.rs                 # Action enum + update() reducer
+├── inference/                    # LLM provider integrations
+│   ├── types.rs                  # Domain types (Context, Source, Effort, StreamChunk)
+│   ├── provider.rs               # CompletionProvider trait
+│   └── providers/
+│       ├── openrouter.rs         # OpenRouter streaming client
+│       └── lmstudio.rs           # LM Studio streaming client
+└── tui/                          # Terminal UI (Ratatui)
+    ├── mod.rs                    # Event loop, terminal setup
+    ├── event.rs                  # Input event mapping
+    ├── ui.rs                     # Top-level rendering, hit testing
+    ├── component.rs              # Component + EventHandler traits
+    └── components/
+        ├── title_bar.rs          # Status bar (model name, effort level)
+        ├── message.rs            # Single message widget
+        ├── message_list.rs       # Scrollable conversation view
+        ├── landing.rs            # Landing page
+        ├── logo.rs               # Animated braille logo
+        └── input_box/
+            ├── mod.rs            # Text input field
+            ├── cursor.rs         # Cursor and scroll state
+            └── text_wrap.rs      # Text wrapping utilities
 ```
 
 ## Architecture
@@ -88,7 +135,7 @@ Elm-style architecture with strict separation:
 └───────┘  └────────┘  └─────────┘
 ```
 
-The `core/` module knows nothing about terminals, HTTP, or any specific interface. The same core can power a TUI, a CLI, a web app, or an IDE extension (like how Claude Code works across terminal and VSCode).
+The `core/` module knows nothing about terminals, HTTP, or any specific interface. The TUI is a component-based adapter using Ratatui, with stateful and stateless components following a React-like pattern — components receive props each frame and manage their own rendering.
 
 ## Development
 
@@ -100,7 +147,7 @@ cargo clippy         # Lint
 cargo fmt            # Format
 ```
 
-Logs are written to `navi.log` in the current directory.
+Rust 2024 edition. Logs are written to `navi.log` in the current directory.
 
 ## License
 

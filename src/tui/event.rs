@@ -1,4 +1,4 @@
-use crossterm::event::{self, Event, KeyCode, KeyModifiers, MouseEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
 
 /// TUI-specific input events
 pub enum TuiEvent {
@@ -10,11 +10,22 @@ pub enum TuiEvent {
     InputChar(char),
     Paste(String), // Bracketed paste - preserves newlines
     Backspace,
-    ScrollUp,
-    ScrollDown,
+    Delete, // Delete character after cursor
+
+    // Cursor movement
+    CursorLeft,
+    CursorRight,
+    CursorUp,
+    CursorDown,
+    CursorHome, // Start of current line
+    CursorEnd,  // End of current line
+
+    // Scrolling (message list only)
+    ScrollUp,   // Mouse wheel only (arrow keys now move cursor)
+    ScrollDown, // Mouse wheel only (arrow keys now move cursor)
     ScrollPageUp,
     ScrollPageDown,
-    ScrollToBottom, // End key - also re-enables stick-to-bottom
+
     MouseMove(u16, u16),
     CycleEffort, // Ctrl+R to cycle reasoning effort
 }
@@ -33,6 +44,9 @@ fn poll_event_timeout(timeout: std::time::Duration) -> Option<TuiEvent> {
     if event::poll(timeout).ok()? {
         match event::read().ok()? {
             Event::Key(key_event) => {
+                if key_event.kind != KeyEventKind::Press {
+                    return None;
+                }
                 // Debug: log all key events to see what the terminal sends
                 log::debug!("Key event: {:?} with modifiers {:?}", key_event.code, key_event.modifiers);
                 match (key_event.modifiers, key_event.code) {
@@ -43,13 +57,19 @@ fn poll_event_timeout(timeout: std::time::Duration) -> Option<TuiEvent> {
                     // Regular key handling
                     (_, KeyCode::Char(c)) => Some(TuiEvent::InputChar(c)),
                     (_, KeyCode::Backspace) => Some(TuiEvent::Backspace),
+                    (_, KeyCode::Delete) => Some(TuiEvent::Delete),
                     (_, KeyCode::Enter) => Some(TuiEvent::Submit),
                     (_, KeyCode::Esc) => Some(TuiEvent::Quit),
-                    (_, KeyCode::Up) => Some(TuiEvent::ScrollUp),
-                    (_, KeyCode::Down) => Some(TuiEvent::ScrollDown),
+                    // Arrow keys now move cursor (not scroll)
+                    (_, KeyCode::Left) => Some(TuiEvent::CursorLeft),
+                    (_, KeyCode::Right) => Some(TuiEvent::CursorRight),
+                    (_, KeyCode::Up) => Some(TuiEvent::CursorUp),
+                    (_, KeyCode::Down) => Some(TuiEvent::CursorDown),
+                    (_, KeyCode::Home) => Some(TuiEvent::CursorHome),
+                    (_, KeyCode::End) => Some(TuiEvent::CursorEnd),
+                    // Page Up/Down for scrolling messages
                     (_, KeyCode::PageUp) => Some(TuiEvent::ScrollPageUp),
                     (_, KeyCode::PageDown) => Some(TuiEvent::ScrollPageDown),
-                    (_, KeyCode::End) => Some(TuiEvent::ScrollToBottom),
                     _ => None,
                 }
             }

@@ -352,7 +352,7 @@ async fn test_effort_levels_affect_request() {
     Mock::given(method("POST"))
         .and(path("/responses"))
         .respond_with(ResponseTemplate::new(200).set_body_string(sse_response))
-        .expect(4) // Will be called 4 times (one for each effort level)
+        .expect(5) // Will be called 5 times (one for each effort level)
         .mount(&mock_server)
         .await;
 
@@ -360,7 +360,7 @@ async fn test_effort_levels_affect_request() {
     let context = create_test_context();
 
     // Test all effort levels
-    for effort in [Effort::None, Effort::Low, Effort::Medium, Effort::High] {
+    for effort in [Effort::None, Effort::Auto, Effort::Low, Effort::Medium, Effort::High] {
         let request = CompletionRequest {
             model: "test-model",
             context: &context,

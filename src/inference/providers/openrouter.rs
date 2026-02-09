@@ -37,7 +37,10 @@ struct InputMessage {
 /// Configuration for reasoning tokens
 #[derive(Serialize, Debug)]
 struct Reasoning {
-    effort: &'static str, // "low", "medium", or "high"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    effort: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    enabled: Option<bool>,
 }
 
 /// The request body for the Responses API
@@ -46,9 +49,8 @@ struct ResponsesRequest {
     model: String,
     input: Vec<InputMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    stream: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    reasoning: Option<Reasoning>,
+    pub stream: Option<bool>,
+    pub reasoning: Reasoning,
 }
 
 /// Generic SSE event wrapper to extract the type field
@@ -77,7 +79,7 @@ fn context_to_input(context: &Context) -> Vec<InputMessage> {
                 Source::Directive => Some(Role::System),
                 Source::User => Some(Role::User),
                 Source::Model => Some(Role::Assistant),
-                Source::Thinking => None, // Skip Thinking items
+                Source::Thinking | Source::Status => None, // Skip non-conversational items
             }
             .map(|role| InputMessage {
                 role,
@@ -87,14 +89,20 @@ fn context_to_input(context: &Context) -> Vec<InputMessage> {
         .collect()
 }
 
-/// Maps our Effort enum to Responses API effort string.
-/// Returns None for Effort::None (omit reasoning entirely).
-fn effort_to_string(effort: Effort) -> Option<&'static str> {
+/// Maps our Effort enum to a Reasoning config for the Responses API.
+fn effort_to_reasoning(effort: Effort) -> Reasoning {
     match effort {
-        Effort::High => Some("high"),
-        Effort::Medium => Some("medium"),
-        Effort::Low => Some("low"),
-        Effort::None => None,
+        Effort::Auto => Reasoning { effort: None, enabled: Some(true) },
+        other => {
+            let effort = match other {
+                Effort::High => "high",
+                Effort::Medium => "medium",
+                Effort::Low => "low",
+                Effort::None => "none",
+                Effort::Auto => unreachable!(),
+            };
+            Reasoning { effort: Some(effort), enabled: None }
+        }
     }
 }
 
@@ -131,8 +139,7 @@ impl CompletionProvider for OpenRouterProvider {
         request: CompletionRequest<'_>,
         sender: Sender<StreamChunk>,
     ) -> Result<(), ProviderError> {
-        // Build the reasoning config (None if effort is None)
-        let reasoning = effort_to_string(request.effort).map(|effort| Reasoning { effort });
+        let reasoning = effort_to_reasoning(request.effort);
 
         // Translate domain types to Responses API format
         let input = context_to_input(request.context);
@@ -150,6 +157,9 @@ impl CompletionProvider for OpenRouterProvider {
             responses_request.input.len(),
             request.effort
         );
+
+        let json_body = serde_json::to_string(&responses_request).unwrap_or_else(|_| "{}".to_string());
+        info!("Raw OpenRouter Request: {}", json_body);
 
         // Make the API request to the Responses endpoint
         let response = self
@@ -219,7 +229,6 @@ impl CompletionProvider for OpenRouterProvider {
                         continue;
                     }
 
-                    // OpenRouter embeds type in JSON, not in event: lines
                     // Parse the JSON to extract the type field
                     let event_type = current_event_type.clone().or_else(|| {
                         serde_json::from_str::<SseEvent>(data)
@@ -251,7 +260,7 @@ impl CompletionProvider for OpenRouterProvider {
                                 }
                             }
                         }
-                        Some("response.reasoning_summary_text.delta") => {
+                        Some("response.reasoning_summary_text.delta") | Some("response.reasoning_text.delta") => {
                             if let Ok(event) = serde_json::from_str::<SseEvent>(data)
                                 && !event.delta.is_empty()
                             {
@@ -362,11 +371,16 @@ mod tests {
     }
 
     #[test]
-    fn test_effort_to_string_returns_correct_values() {
-        assert_eq!(effort_to_string(Effort::High), Some("high"));
-        assert_eq!(effort_to_string(Effort::Medium), Some("medium"));
-        assert_eq!(effort_to_string(Effort::Low), Some("low"));
-        assert_eq!(effort_to_string(Effort::None), None);
+    fn test_effort_to_reasoning_returns_correct_values() {
+        assert_eq!(effort_to_reasoning(Effort::High).effort, Some("high"));
+        assert_eq!(effort_to_reasoning(Effort::Medium).effort, Some("medium"));
+        assert_eq!(effort_to_reasoning(Effort::Low).effort, Some("low"));
+        assert_eq!(effort_to_reasoning(Effort::None).effort, Some("none"));
+        assert_eq!(effort_to_reasoning(Effort::Auto).effort, None);
+
+        // Auto uses enabled flag, explicit efforts don't
+        assert_eq!(effort_to_reasoning(Effort::Auto).enabled, Some(true));
+        assert_eq!(effort_to_reasoning(Effort::High).enabled, None);
     }
 
     #[test]
@@ -394,34 +408,46 @@ mod tests {
     }
 
     #[test]
-    fn test_responses_request_omits_none_fields() {
+    fn test_responses_request_auto_effort() {
         let request = ResponsesRequest {
             model: "test".to_string(),
             input: vec![],
             stream: None,
-            reasoning: None,
+            reasoning: effort_to_reasoning(Effort::Auto),
         };
 
         let json = serde_json::to_string(&request).unwrap();
-        // None fields should be omitted
         assert!(!json.contains("stream"));
-        assert!(!json.contains("reasoning"));
+        // Auto: {"enabled":true}, no effort key
+        assert!(json.contains(r#""enabled":true"#));
+        assert!(!json.contains(r#""effort""#));
     }
 
     #[test]
-    fn test_responses_request_includes_some_fields() {
+    fn test_responses_request_explicit_effort() {
         let request = ResponsesRequest {
             model: "test".to_string(),
             input: vec![],
             stream: Some(true),
-            reasoning: Some(Reasoning {
-                effort: "high",
-            }),
+            reasoning: effort_to_reasoning(Effort::High),
         };
 
         let json = serde_json::to_string(&request).unwrap();
         assert!(json.contains(r#""stream":true"#));
         assert!(json.contains(r#""effort":"high"#));
+    }
+
+    #[test]
+    fn test_responses_request_reasoning_off() {
+        let request = ResponsesRequest {
+            model: "test".to_string(),
+            input: vec![],
+            stream: Some(true),
+            reasoning: effort_to_reasoning(Effort::None),
+        };
+
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains(r#""effort":"none"#));
     }
 
     #[test]

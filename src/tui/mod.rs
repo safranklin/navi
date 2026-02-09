@@ -9,139 +9,45 @@
 
 mod event;
 mod ui;
+mod component;
+mod components;
 
 use log::{debug, info};
 use std::env;
 use std::io::stdout;
 use std::sync::{mpsc, Arc};
+
 use crossterm::execute;
 use crossterm::event::{
     EnableMouseCapture, DisableMouseCapture, EnableBracketedPaste, DisableBracketedPaste,
     KeyboardEnhancementFlags, PushKeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
 };
-use tui_scrollview::ScrollViewState;
+use crossterm::cursor::{Show, Hide, SetCursorStyle};
 
 use crate::core::action::{Action, update, Effect};
 use crate::core::state::App;
 use crate::inference::{CompletionRequest, CompletionProvider, LmStudioProvider, OpenRouterProvider, StreamChunk};
+use crate::inference::Effort;
 use crate::Provider;
 use crate::tui::event::{poll_event, poll_event_immediate, TuiEvent};
-
-/// Cached layout measurements for efficient rendering and hit testing
-pub struct LayoutCache {
-    /// Individual segment heights
-    pub heights: Vec<u16>,
-    /// Cumulative heights for O(log n) hit testing via binary search
-    pub prefix_heights: Vec<u16>,
-
-    /// Internal metadata for cache validity
-    /// Message count when cache was last built
-    message_count: usize,
-    /// Content width when cache was last built
-    content_width: u16,
-}
-
-impl Default for LayoutCache {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl LayoutCache {
-    pub fn new() -> Self {
-        Self {
-            heights: Vec::new(),
-            prefix_heights: Vec::new(),
-            message_count: 0,
-            content_width: 0,
-        }
-    }
-
-    /// Returns how many cached heights are still valid and can be reused.
-    /// Returns 0 if full rebuild needed, or N if first N heights are reusable.
-    pub fn reusable_count(&self, message_count: usize, content_width: u16, is_loading: bool) -> usize {
-        // Return the number of heights that can be reused (0 = full rebuild).
-        // Full rebuild needed if: width changed, cache empty, or messages removed
-        if self.content_width != content_width || self.heights.is_empty() || message_count < self.message_count {
-            0
-        }
-        else if is_loading {
-            if message_count == 0 {
-                0
-            } else {
-                message_count - 1 // Currently streaming, last message height may change
-            }
-        }
-        else {
-            message_count // All heights valid
-        }
-    }
-
-    /// Update cache metadata after rebuilding
-    pub fn update_metadata(&mut self, message_count: usize, content_width: u16) {
-        self.message_count = message_count;
-        self.content_width = content_width;
-    }
-
-    /// Rebuild prefix heights (cumulative sums) for O(log n) hit testing
-    pub fn rebuild_prefix_heights(&mut self) {
-        // prefix_heights[i] = sum of heights[0..=i]
-        // Example: heights = [3, 5, 4] → prefix_heights = [3, 8, 12]
-        self.prefix_heights = self.heights.iter().scan(0u16, |acc, &h| {
-            *acc += h; // update running total
-            Some(*acc) // yield current total
-        }).collect::<Vec<u16>>()
-    }
-
-    /// Calculate which segments are visible in the viewport (with buffer for smooth scrolling).
-    /// Returns a Range of segment indices that should be rendered.
-    pub fn visible_range(&self, scroll_offset: u16, viewport_height: u16) -> std::ops::Range<usize> {
-        // Add buffer zone (0.5x viewport on each side = 2x total render area)
-        // This handles partial visibility at boundaries and improves scroll smoothness
-        let buffer = viewport_height / 2;
-
-        let buffered_start = scroll_offset.saturating_sub(buffer);
-        let buffered_end = scroll_offset.saturating_add(viewport_height).saturating_add(buffer);
-
-        let start = self.prefix_heights.partition_point(|&end| end <= buffered_start);
-        // Find items whose START is < buffered_end (not just END < buffered_end)
-        // prefix_heights[i] = end of item i = start of item i+1
-        // So we add 1 to include items that start before buffered_end but end after
-        let end = self.prefix_heights.partition_point(|&end| end < buffered_end)
-            .saturating_add(1)
-            .min(self.prefix_heights.len());
-
-        start..end
-    }
-}
+use crate::tui::component::EventHandler;
+use crate::tui::components::{InputBox, InputEvent, MessageListState};
 
 /// TUI-specific presentation state (not part of core business logic)
 pub struct TuiState {
-    pub scroll_state: ScrollViewState,
-    pub has_unseen_content: bool,
-    pub hovered_index: Option<usize>,
-    pub input_buffer: String,
-    /// Cached layout measurements for rendering and hit testing
-    pub layout: LayoutCache,
-    /// When true, auto-scroll to bottom on new content (chat-style behavior)
-    pub stick_to_bottom: bool,
-}
-
-impl Default for TuiState {
-    fn default() -> Self {
-        Self::new()
-    }
+    // Persistent component states
+    pub message_list: MessageListState,
+    pub input_box: InputBox,
+    // Animation state
+    pub pulse_value: f32,
 }
 
 impl TuiState {
-    pub fn new() -> Self {
+    pub fn new(initial_effort: Effort) -> Self {
         Self {
-            scroll_state: ScrollViewState::default(),
-            has_unseen_content: false,
-            hovered_index: None,
-            input_buffer: String::new(),
-            layout: LayoutCache::new(),
-            stick_to_bottom: true, // Start at bottom
+            message_list: MessageListState::new(),
+            input_box: InputBox::new(initial_effort),
+            pulse_value: 0.0,
         }
     }
 }
@@ -157,12 +63,14 @@ impl TerminalModeGuard {
             stdout(),
             EnableMouseCapture,
             EnableBracketedPaste,
+            Show, // Show cursor for input editing
+            SetCursorStyle::BlinkingBar, // Enable blinking cursor
             PushKeyboardEnhancementFlags(
                 KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
                     | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
             )
         )?;
-        info!("Terminal modes enabled (mouse, bracketed paste, keyboard enhancement)");
+        info!("Terminal modes enabled (mouse, bracketed paste, blinking cursor, keyboard enhancement)");
         Ok(Self)
     }
 }
@@ -173,7 +81,8 @@ impl Drop for TerminalModeGuard {
             stdout(),
             PopKeyboardEnhancementFlags,
             DisableMouseCapture,
-            DisableBracketedPaste
+            DisableBracketedPaste,
+            Hide // Hide cursor on exit
         );
     }
 }
@@ -189,88 +98,94 @@ pub fn run(provider_choice: Provider) -> std::io::Result<()> {
 
     let model_name = env::var("PRIMARY_MODEL_NAME").expect("PRIMARY_MODEL_NAME must be set");
     let mut app = App::new(provider, model_name);
-    let mut tui = TuiState::new();
+    // Initialize TuiState with current effort from App
+    let mut tui = TuiState::new(app.effort);
+    
     let mut terminal = ratatui::init();
     let _terminal_mode_guard = TerminalModeGuard::new();
 
     // Channel for actions from background tasks
     let (tx, rx) = mpsc::channel();
+    
+    // Animation timer
+    let start_time = std::time::Instant::now();
 
     loop {
-        terminal.draw(|f| ui::draw_ui(f, &app, &mut tui))?;
+        // Sync InputBox effort prop with App state
+        tui.input_box.effort = app.effort;
+        
+        // Update animation state (sine wave breathing)
+        let elapsed = start_time.elapsed().as_secs_f32();
+        tui.pulse_value = (elapsed * 5.0).sin() * 0.5 + 0.5;
+        
+        // Frame counter for animations (approx 12 fps for spinner/landing)
+        let spinner_frame = (elapsed * 12.0) as usize;
+
+        terminal.draw(|f| ui::draw_ui(f, &app, &mut tui, spinner_frame))?;
 
         // Wait for first event (with timeout for background task responsiveness)
         let first_event = poll_event();
 
         // Process first event + drain ALL pending events before next draw
-        // This batches rapid input (like paste) into a single redraw
         let mut should_quit = false;
         for event in first_event.into_iter().chain(std::iter::from_fn(poll_event_immediate)) {
-            match event {
-                // TUI-local events - modify TuiState directly
-                TuiEvent::InputChar(c) => {
-                    tui.input_buffer.push(c);
+            // Priority 1: Check for global Quit
+            if matches!(event, TuiEvent::Quit) {
+                let effect = update(&mut app, Action::Quit);
+                if effect == Effect::Quit {
+                    should_quit = true;
                 }
-                TuiEvent::Paste(text) => {
-                    tui.input_buffer.push_str(&text);
-                }
-                TuiEvent::Backspace => {
-                    tui.input_buffer.pop();
-                }
-                TuiEvent::ScrollUp => {
-                    tui.scroll_state.scroll_up();
-                    tui.stick_to_bottom = false; // User scrolled up, disable auto-scroll
-                }
-                TuiEvent::ScrollDown => {
-                    tui.scroll_state.scroll_down();
-                    // Don't re-enable stick_to_bottom here; user must press End
-                }
-                TuiEvent::ScrollPageUp => {
-                    tui.scroll_state.scroll_page_up();
-                    tui.stick_to_bottom = false;
-                }
-                TuiEvent::ScrollPageDown => {
-                    tui.scroll_state.scroll_page_down();
-                }
-                TuiEvent::ScrollToBottom => {
-                    tui.scroll_state.scroll_to_bottom();
-                    tui.stick_to_bottom = true; // Re-enable auto-scroll
-                }
-                TuiEvent::MouseMove(_col, row) => {
-                    let frame_area = terminal.get_frame().area();
-                    let scroll_offset = tui.scroll_state.offset().y;
-                    tui.hovered_index = ui::hit_test_message(
-                        row,
-                        frame_area,
-                        scroll_offset,
-                        &tui.layout.prefix_heights,
-                    );
-                }
+                continue;
+            }
 
-                // Core events - pass to core::update
-                TuiEvent::Quit => {
-                    let effect = update(&mut app, Action::Quit);
-                    if effect == Effect::Quit {
-                        should_quit = true;
+            // Priority 2: Delegate to InputBox (handles typing, pasting, submitting, cycle effort)
+            // Note: InputBox returns Option<InputEvent>
+            if let Some(input_event) = tui.input_box.handle_event(&event) {
+                match input_event {
+                    InputEvent::Submit(text) => {
+                        // Don't allow submitting while loading
+                        if !app.is_loading {
+                            let effect = update(&mut app, Action::Submit(text));
+                            if effect == Effect::SpawnRequest {
+                                spawn_request(&app, tx.clone());
+                            }
+                        }
+                    }
+                    InputEvent::CycleEffort => {
+                        // InputBox detected Ctrl+R, we update App state
+                        app.effort = app.effort.next();
+                        app.status_message = format!("Reasoning: {}", app.effort.label());
+                    }
+                    InputEvent::ContentChanged => {
+                        // Redraw handled by main loop
                     }
                 }
-                TuiEvent::Submit => {
-                    // Don't allow submitting while a response is streaming
-                    if app.is_loading {
-                        continue;
-                    }
-                    let message = std::mem::take(&mut tui.input_buffer);
-                    let effect = update(&mut app, Action::Submit(message));
-                    if effect == Effect::SpawnRequest {
-                        spawn_request(&app, tx.clone());
-                    }
-                }
-                TuiEvent::CycleEffort => {
-                    app.effort = app.effort.next();
-                    app.status_message = format!("Reasoning: {}", app.effort.label());
-                }
+                continue;
+            }
+
+            // Priority 3: Delegate to MessageList (scrolling)
+            if tui.message_list.handle_event(&event).is_some() {
+                 // MessageList handled it
+                 continue;
+            }
+
+            // Priority 4: Mouse hover (global for now, or could be in MessageListState)
+            if let TuiEvent::MouseMove(_col, row) = event {
+                // We need hit testing. Use layout from message_list state.
+                let frame_area = terminal.get_frame().area();
+                let scroll_offset = tui.message_list.scroll_state.offset().y;
+                let input_height = tui.input_box.calculate_height(frame_area.width);
+
+                tui.message_list.hovered_index = ui::hit_test_message(
+                    row,
+                    frame_area,
+                    scroll_offset,
+                    &tui.message_list.layout.prefix_heights,
+                    input_height,
+                );
             }
         }
+        
         if should_quit {
             break;
         }

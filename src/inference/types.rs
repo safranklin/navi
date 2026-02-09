@@ -10,6 +10,9 @@ pub enum Source {
     Directive,
     #[serde(rename = "thought")]
     Thinking,
+    /// UI-only status indicator (e.g. "Preparing..."). Never sent to the model.
+    #[serde(rename = "status")]
+    Status,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -119,13 +122,16 @@ pub enum Effort {
     /// Thorough analysis - model takes more time to reason
     #[serde(rename = "high")]
     High,
-    /// Balanced reasoning (default)
+    /// Balanced reasoning
     #[serde(rename = "medium")]
-    #[default]
     Medium,
     /// Quick thinking - faster but less thorough
     #[serde(rename = "low")]
     Low,
+    /// Model decides whether and how much to reason (default)
+    #[serde(rename = "auto")]
+    #[default]
+    Auto,
     /// Disables reasoning entirely
     #[serde(rename = "none")]
     None,
@@ -135,7 +141,8 @@ impl Effort {
     /// Cycles to the next effort level (wraps around)
     pub fn next(self) -> Effort {
         match self {
-            Effort::None => Effort::Low,
+            Effort::None => Effort::Auto,
+            Effort::Auto => Effort::Low,
             Effort::Low => Effort::Medium,
             Effort::Medium => Effort::High,
             Effort::High => Effort::None,
@@ -148,6 +155,7 @@ impl Effort {
             Effort::High => "High",
             Effort::Medium => "Medium",
             Effort::Low => "Low",
+            Effort::Auto => "Auto",
             Effort::None => "Off",
         }
     }
@@ -227,7 +235,8 @@ mod tests {
     
     #[test]
     fn test_effort_cycle() {
-        assert_eq!(Effort::None.next(), Effort::Low);
+        assert_eq!(Effort::None.next(), Effort::Auto);
+        assert_eq!(Effort::Auto.next(), Effort::Low);
         assert_eq!(Effort::Low.next(), Effort::Medium);
         assert_eq!(Effort::Medium.next(), Effort::High);
         assert_eq!(Effort::High.next(), Effort::None);
