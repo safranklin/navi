@@ -6,6 +6,18 @@
 //! This is the only module that knows about ratatui and crossterm.
 //! The intention is to swap this out for a different adapter (React, web, etc.) in the future
 //! if needed.
+//!
+//! ## Redraw Strategy
+//!
+//! The event loop uses conditional redraw to avoid unnecessary work:
+//!
+//! - **Animating** (landing page, loading): draws every ~80ms for smooth animation.
+//! - **Idle** (conversation, no input): sleeps up to 500ms, only redraws on events
+//!   or terminal resize. Animation math is also skipped.
+//!
+//! A `SteadyBlock` cursor style is used instead of a blinking cursor because
+//! ratatui's `set_cursor_position` resets the terminal's blink timer on every
+//! `draw()` call, making blinking cursors appear erratic during continuous redraws.
 
 mod event;
 mod ui;
@@ -29,7 +41,7 @@ use crate::core::state::App;
 use crate::inference::{CompletionRequest, CompletionProvider, LmStudioProvider, OpenRouterProvider, StreamChunk};
 use crate::inference::Effort;
 use crate::Provider;
-use crate::tui::event::{poll_event, poll_event_immediate, TuiEvent};
+use crate::tui::event::{poll_event_timeout, poll_event_immediate, TuiEvent};
 use crate::tui::component::EventHandler;
 use crate::tui::components::{InputBox, InputEvent, MessageListState};
 
@@ -64,13 +76,13 @@ impl TerminalModeGuard {
             EnableMouseCapture,
             EnableBracketedPaste,
             Show, // Show cursor for input editing
-            SetCursorStyle::BlinkingBar, // Enable blinking cursor
+            SetCursorStyle::SteadyBlock, // Non-blinking: avoids blink timer reset from continuous redraws
             PushKeyboardEnhancementFlags(
                 KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
                     | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
             )
         )?;
-        info!("Terminal modes enabled (mouse, bracketed paste, blinking cursor, keyboard enhancement)");
+        info!("Terminal modes enabled (mouse, bracketed paste, steady block cursor, keyboard enhancement)");
         Ok(Self)
     }
 }
@@ -109,26 +121,49 @@ pub fn run(provider_choice: Provider) -> std::io::Result<()> {
     
     // Animation timer
     let start_time = std::time::Instant::now();
+    let mut needs_redraw = true; // Force first frame
 
     loop {
         // Sync InputBox effort prop with App state
         tui.input_box.effort = app.effort;
-        
-        // Update animation state (sine wave breathing)
-        let elapsed = start_time.elapsed().as_secs_f32();
-        tui.pulse_value = (elapsed * 5.0).sin() * 0.5 + 0.5;
-        
-        // Frame counter for animations (approx 12 fps for spinner/landing)
-        let spinner_frame = (elapsed * 12.0) as usize;
 
-        terminal.draw(|f| ui::draw_ui(f, &app, &mut tui, spinner_frame))?;
+        // Determine if animations are running (landing page or loading spinner)
+        let has_visible_messages = app.context.items.iter().any(|item|
+            matches!(item.source, crate::inference::Source::User | crate::inference::Source::Model)
+        );
+        let animating = app.is_loading || !has_visible_messages;
 
-        // Wait for first event (with timeout for background task responsiveness)
-        let first_event = poll_event();
+        if animating {
+            needs_redraw = true;
+        }
+
+        // Only draw when something changed
+        if needs_redraw {
+            let elapsed = start_time.elapsed().as_secs_f32();
+            tui.pulse_value = (elapsed * 5.0).sin() * 0.5 + 0.5;
+            let spinner_frame = (elapsed * 12.0) as usize;
+            terminal.draw(|f| ui::draw_ui(f, &app, &mut tui, spinner_frame))?;
+            needs_redraw = false;
+        }
+
+        // Dynamic poll timeout: short when animating (~12fps), long when idle
+        let timeout = if animating {
+            std::time::Duration::from_millis(80)
+        } else {
+            std::time::Duration::from_millis(500)
+        };
+        let first_event = poll_event_timeout(timeout);
 
         // Process first event + drain ALL pending events before next draw
         let mut should_quit = false;
+        if first_event.is_some() {
+            needs_redraw = true;
+        }
         for event in first_event.into_iter().chain(std::iter::from_fn(poll_event_immediate)) {
+            // Resize just needs a redraw (already flagged above)
+            if matches!(event, TuiEvent::Resize) {
+                continue;
+            }
             // Priority 1: Check for global Quit
             if matches!(event, TuiEvent::Quit) {
                 let effect = update(&mut app, Action::Quit);
@@ -192,6 +227,7 @@ pub fn run(provider_choice: Provider) -> std::io::Result<()> {
 
         // Handle background task actions (streaming responses)
         while let Ok(action) = rx.try_recv() {
+            needs_redraw = true;
             debug!("Event loop received: {:?}", action);
             let effect = update(&mut app, action);
             match effect {

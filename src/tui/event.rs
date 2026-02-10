@@ -28,11 +28,7 @@ pub enum TuiEvent {
 
     MouseMove(u16, u16),
     CycleEffort, // Ctrl+R to cycle reasoning effort
-}
-
-/// Poll for an event with timeout (blocks up to 100ms)
-pub fn poll_event() -> Option<TuiEvent> {
-    poll_event_timeout(std::time::Duration::from_millis(100))
+    Resize,      // Terminal resized — triggers redraw
 }
 
 /// Poll for an event without blocking (returns immediately)
@@ -40,7 +36,11 @@ pub fn poll_event_immediate() -> Option<TuiEvent> {
     poll_event_timeout(std::time::Duration::ZERO)
 }
 
-fn poll_event_timeout(timeout: std::time::Duration) -> Option<TuiEvent> {
+/// Poll for an event with a caller-specified timeout.
+///
+/// The main loop uses a dynamic timeout: short (~80ms) during animation for
+/// responsive frame updates, long (~500ms) when idle to reduce CPU wakeups.
+pub fn poll_event_timeout(timeout: std::time::Duration) -> Option<TuiEvent> {
     if event::poll(timeout).ok()? {
         match event::read().ok()? {
             Event::Key(key_event) => {
@@ -84,6 +84,7 @@ fn poll_event_timeout(timeout: std::time::Duration) -> Option<TuiEvent> {
                 }
             }
             Event::Paste(data) => Some(TuiEvent::Paste(data)),
+            Event::Resize(_, _) => Some(TuiEvent::Resize),
             _ => None,
         }
     } else {
