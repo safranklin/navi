@@ -236,7 +236,7 @@ pub fn run(provider_choice: Provider) -> std::io::Result<()> {
                     spawn_request(&app, tx.clone());
                 }
                 Effect::ExecuteTool(tool_call) => {
-                    spawn_tool_execution(tool_call, tx.clone());
+                    spawn_tool_execution(tool_call, app.registry.clone(), tx.clone());
                 }
                 _ => {}
             }
@@ -246,10 +246,14 @@ pub fn run(provider_choice: Provider) -> std::io::Result<()> {
     Ok(())
 }
 
-fn spawn_tool_execution(tool_call: crate::inference::ToolCall, tx: mpsc::Sender<Action>) {
+fn spawn_tool_execution(
+    tool_call: crate::inference::ToolCall,
+    registry: Arc<crate::core::tools::ToolRegistry>,
+    tx: mpsc::Sender<Action>,
+) {
     info!("Spawning tool execution: {} (call_id={})", tool_call.name, tool_call.call_id);
     tokio::spawn(async move {
-        let output = crate::core::tools::execute(&tool_call).await;
+        let output = registry.execute(&tool_call).await;
         let _ = tx.send(Action::ToolResultReady {
             call_id: tool_call.call_id,
             output,
@@ -265,7 +269,7 @@ fn spawn_request(app: &App, tx: mpsc::Sender<Action>) {
     let context = app.context.clone();
     let model = app.model_name.clone();
     let effort = app.effort;
-    let tools = app.tools.clone();
+    let tools = app.tool_definitions();
 
     // Async channel for streaming chunks
     let (chunk_tx, mut chunk_rx) = tokio::sync::mpsc::channel::<StreamChunk>(100);

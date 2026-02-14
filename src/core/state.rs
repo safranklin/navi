@@ -12,7 +12,7 @@
 //! ├── is_loading: bool              // waiting for API
 //! ├── effort: Effort                // reasoning effort level
 //! ├── error: Option<String>         // error message
-//! ├── tools: Vec<ToolDefinition>    // available tools
+//! ├── registry: Arc<ToolRegistry>   // tool registry
 //! └── pending_tool_calls: HashSet   // call_ids awaiting results
 //! ```
 //!
@@ -21,6 +21,7 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
+use crate::core::tools::ToolRegistry;
 use crate::inference::{CompletionProvider, Context, Effort, ToolDefinition};
 
 pub struct App {
@@ -31,7 +32,7 @@ pub struct App {
     pub is_loading: bool,
     pub effort: Effort,
     pub error: Option<String>,
-    pub tools: Vec<ToolDefinition>,
+    pub registry: Arc<ToolRegistry>,
     pub pending_tool_calls: HashSet<String>, // call_ids awaiting results
 }
 
@@ -45,9 +46,13 @@ impl App {
             is_loading: false,
             effort: Effort::default(),
             error: None,
-            tools: crate::core::tools::available(),
+            registry: Arc::new(crate::core::tools::default_registry()),
             pending_tool_calls: HashSet::new(),
         }
+    }
+
+    pub fn tool_definitions(&self) -> Vec<ToolDefinition> {
+        self.registry.definitions()
     }
 }
 
