@@ -31,6 +31,7 @@ async fn collect_chunks(mut receiver: mpsc::Receiver<StreamChunk>) -> (Vec<Strin
         match chunk {
             StreamChunk::Content(s) => content_chunks.push(s),
             StreamChunk::Thinking(s) => thinking_chunks.push(s),
+            StreamChunk::ToolCall(_) => {} // Collected separately when testing tool calls
         }
     }
 
@@ -76,6 +77,7 @@ data: {\"type\":\"response.completed\"}
         model: "test-model",
         context: &context,
         effort: Effort::None,
+        tools: &[],
     };
 
     let (tx, rx) = mpsc::channel(100);
@@ -123,6 +125,7 @@ data: {\"type\":\"response.completed\"}
         model: "test-model",
         context: &context,
         effort: Effort::High,
+        tools: &[],
     };
 
     let (tx, rx) = mpsc::channel(100);
@@ -155,6 +158,7 @@ async fn test_openrouter_api_error_response() {
         model: "test-model",
         context: &context,
         effort: Effort::None,
+        tools: &[],
     };
 
     let (tx, _rx) = mpsc::channel(100);
@@ -191,6 +195,7 @@ data: {\"type\":\"response.output_text.delta\",\"delta\":\" world\"}
         model: "test-model",
         context: &context,
         effort: Effort::None,
+        tools: &[],
     };
 
     let (tx, rx) = mpsc::channel(1);
@@ -238,6 +243,7 @@ data: {\"id\":\"test\"}
         model: "test-model",
         context: &context,
         effort: Effort::None,
+        tools: &[],
     };
 
     let (tx, rx) = mpsc::channel(100);
@@ -279,6 +285,7 @@ data: {\"id\":\"test\"}
         model: "test-model",
         context: &context,
         effort: Effort::Medium,
+        tools: &[],
     };
 
     let (tx, rx) = mpsc::channel(100);
@@ -326,6 +333,7 @@ data: {\"id\":\"test\"}
         model: "test-model",
         context: &context,
         effort: Effort::None,
+        tools: &[],
     };
 
     let (tx, rx) = mpsc::channel(100);
@@ -365,6 +373,7 @@ async fn test_effort_levels_affect_request() {
             model: "test-model",
             context: &context,
             effort,
+            tools: &[],
         };
 
         let (tx, _rx) = mpsc::channel(100);

@@ -42,11 +42,20 @@ fn replace_typography(text: &str) -> String {
         .replace('…', "...") // Ellipsis
 }
 
-/// Represents the model input context, holding a collection of ContextSegments.
+/// A single item in the context — either a message, tool call, or tool result.
+/// The Responses API input array is polymorphic; this enum mirrors that structure.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum ContextItem {
+    Message(ContextSegment),
+    ToolCall(ToolCall),
+    ToolResult(ToolResult),
+}
+
+/// Represents the model input context, holding a collection of context items.
 #[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct Context {
-    /// Collection of ContextSegments representing the model input in its entirety.
-    pub items: Vec<ContextSegment>,
+    /// Polymorphic collection: messages, tool calls, and tool results.
+    pub items: Vec<ContextItem>,
 }
 
 impl Default for Context {
@@ -60,17 +69,29 @@ impl Context {
     pub fn new() -> Self {
         let sys_directive = ContextSegment {
             source: Source::Directive,
-            content: String::from("You are a helpful assistant guided by three principles: be genuinely useful, be honest about uncertainty, and be direct without being terse. Think before responding. Prefer clarity over hedging."),
+            content: String::from(
+                "You are a helpful assistant guided by three principles: be genuinely useful, be honest about uncertainty, \
+                 and be direct without being terse. Think before responding. Prefer clarity over hedging. \
+                 If a tool is registered that could help you answer, call it with the appropriate arguments. \
+                 Prefer tool enriched answers over purely internal ones. If you don't know the answer, say you don't know. \
+                 If you need more information to answer, ask for it. Use all available tools to answer questions about recent events or information not in your training data. \
+                 Always use tools when relevant information is outside your training data or if it would improve the quality of your response."
+            ),
         };
         Context {
-            items: vec![sys_directive],
+            items: vec![ContextItem::Message(sys_directive)],
         }
     }
-    /// Adds a new ContextSegment to the context and returns a reference to the newly added segment.
+
+    /// Adds a new ContextSegment (wrapped in ContextItem::Message) and returns a reference to it.
     pub fn add(&mut self, segment: ContextSegment) -> &ContextSegment {
-        self.items.push(segment);
-        self.items.last().expect("just added an element to the context so it must exist")
+        self.items.push(ContextItem::Message(segment));
+        match self.items.last().expect("just pushed") {
+            ContextItem::Message(seg) => seg,
+            _ => unreachable!(),
+        }
     }
+
     pub fn add_user_message(&mut self, content: String) -> &ContextSegment {
         let segment = ContextSegment {
             source: Source::User,
@@ -79,18 +100,28 @@ impl Context {
         self.add(segment)
     }
 
+    /// Adds a tool call to the context.
+    pub fn add_tool_call(&mut self, tc: ToolCall) {
+        self.items.push(ContextItem::ToolCall(tc));
+    }
+
+    /// Adds a tool result to the context.
+    pub fn add_tool_result(&mut self, tr: ToolResult) {
+        self.items.push(ContextItem::ToolResult(tr));
+    }
+
     /// Appends content to the last message if it is from the model.
     /// If the last message is not from the model, creates a new one.
     pub fn append_to_last_model_message(&mut self, content: &str) {
         let normalized = replace_typography(content);
 
-        if let Some(last) = self.items.last_mut()
-            && last.source == Source::Model {
-                last.content.push_str(&normalized);
+        if let Some(ContextItem::Message(seg)) = self.items.last_mut()
+            && seg.source == Source::Model {
+                seg.content.push_str(&normalized);
                 return;
             }
-        
-        // If we get here, either no items or last item is not model
+
+        // If we get here, either no items or last item is not a model message
         self.add(ContextSegment {
             source: Source::Model,
             content: normalized,
@@ -102,12 +133,12 @@ impl Context {
     pub fn append_to_last_thinking_message(&mut self, content: &str) {
         let normalized = replace_typography(content);
 
-        if let Some(last) = self.items.last_mut()
-            && last.source == Source::Thinking {
-                last.content.push_str(&normalized);
+        if let Some(ContextItem::Message(seg)) = self.items.last_mut()
+            && seg.source == Source::Thinking {
+                seg.content.push_str(&normalized);
                 return;
             }
-        
+
         self.add(ContextSegment {
             source: Source::Thinking,
             content: normalized,
@@ -161,11 +192,36 @@ impl Effort {
     }
 }
 
+/// A tool the model can call.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolDefinition {
+    pub name: String,
+    pub description: String,
+    pub parameters: serde_json::Value, // JSON Schema
+}
+
+/// A completed tool call from the model.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ToolCall {
+    pub id: String,      // API object ID (e.g. "fc_abc123") — needed for input array roundtrip
+    pub call_id: String,  // Correlation ID (e.g. "call_xyz789") — links call to result
+    pub name: String,
+    pub arguments: String, // JSON string
+}
+
+/// Result of executing a tool.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ToolResult {
+    pub call_id: String, // Matches ToolCall.call_id
+    pub output: String,
+}
+
 /// Represents a chunk of streamed content from the model.
 #[derive(Debug)]
 pub enum StreamChunk {
     Content(String),
     Thinking(String),
+    ToolCall(ToolCall), // Complete tool call (arguments buffered by provider)
 }
 
 #[cfg(test)]
@@ -204,12 +260,21 @@ mod tests {
         test_normalize_rules_no_special_chars: "Hello world" => "Hello world",
     }
 
+    /// Helper to extract the ContextSegment from a ContextItem::Message, panicking otherwise.
+    fn unwrap_message(item: &ContextItem) -> &ContextSegment {
+        match item {
+            ContextItem::Message(seg) => seg,
+            other => panic!("Expected ContextItem::Message, got {:?}", other),
+        }
+    }
+
     #[test]
     fn test_context_init_with_directive() {
         let context = Context::new();
         assert!(!context.items.is_empty());
-        assert_eq!(context.items[0].source, Source::Directive);
-        assert!(context.items[0].content.starts_with("You are a helpful assistant"));
+        let first = unwrap_message(&context.items[0]);
+        assert_eq!(first.source, Source::Directive);
+        assert!(first.content.starts_with("You are a helpful assistant"));
     }
 
     /// Tests adding ContextSegments to the Context.
@@ -221,16 +286,14 @@ mod tests {
             content: "test".to_string(),
         };
         let added = ctx.add(segment);
-        // When a ContextSegment is added, it a reference to it shouild be added and the length of items should increase.
         assert_eq!(added.content, "test");
         assert_eq!(ctx.items.len(), 2);
         ctx.add(ContextSegment {
             source: Source::Model,
             content: "response".to_string(),
         });
-        // Verify the second addition
         assert_eq!(ctx.items.len(), 3);
-        assert_eq!(ctx.items[2].content, "response");
+        assert_eq!(unwrap_message(&ctx.items[2]).content, "response");
     }
     
     #[test]
@@ -247,12 +310,13 @@ mod tests {
         let mut ctx = Context::new();
         ctx.append_to_last_thinking_message("thinking");
         assert_eq!(ctx.items.len(), 2);
-        assert_eq!(ctx.items[1].source, Source::Thinking);
-        assert_eq!(ctx.items[1].content, "thinking");
+        let seg = unwrap_message(&ctx.items[1]);
+        assert_eq!(seg.source, Source::Thinking);
+        assert_eq!(seg.content, "thinking");
 
         ctx.append_to_last_thinking_message(" more");
         assert_eq!(ctx.items.len(), 2);
-        assert_eq!(ctx.items[1].content, "thinking more");
+        assert_eq!(unwrap_message(&ctx.items[1]).content, "thinking more");
     }
 
     #[test]
@@ -264,13 +328,14 @@ mod tests {
         // Append to non-model message (should create new)
         ctx.append_to_last_model_message("start");
         assert_eq!(ctx.items.len(), 3); // System, User, Model
-        assert_eq!(ctx.items[2].content, "start");
-        assert_eq!(ctx.items[2].source, Source::Model);
-        
+        let seg = unwrap_message(&ctx.items[2]);
+        assert_eq!(seg.content, "start");
+        assert_eq!(seg.source, Source::Model);
+
         // Append to model message (should append)
         ctx.append_to_last_model_message(" continued");
         assert_eq!(ctx.items.len(), 3);
-        assert_eq!(ctx.items[2].content, "start continued");
+        assert_eq!(unwrap_message(&ctx.items[2]).content, "start continued");
     }
 
     #[test]
@@ -278,10 +343,10 @@ mod tests {
         let mut ctx = Context::new();
         // Case 1: Typography in new message
         ctx.append_to_last_model_message("Hello “World”");
-        assert_eq!(ctx.items.last().unwrap().content, "Hello \"World\"");
+        assert_eq!(unwrap_message(ctx.items.last().unwrap()).content, "Hello \"World\"");
 
         // Case 2: Typography in appended chunk
         ctx.append_to_last_model_message("—WAIT");
-        assert_eq!(ctx.items.last().unwrap().content, "Hello \"World\"--WAIT");
+        assert_eq!(unwrap_message(ctx.items.last().unwrap()).content, "Hello \"World\"--WAIT");
     }
 }

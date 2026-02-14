@@ -86,4 +86,5 @@ pub mod message_list;
 pub use message_list::{MessageList, MessageListState};
 pub mod landing;
 pub mod logo;
+pub mod tool_message;
 pub use landing::LandingPage;

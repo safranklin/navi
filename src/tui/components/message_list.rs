@@ -25,6 +25,7 @@ use tui_scrollview::{ScrollView, ScrollbarVisibility, ScrollViewState};
 use crate::inference::{Context, Source};
 use crate::tui::component::{Component, EventHandler};
 use crate::tui::components::message::Message;
+use crate::tui::components::tool_message::{ToolMessage, ToolMessageKind};
 use crate::tui::event::TuiEvent;
 
 /// Layout and scroll state for the message list.
@@ -74,6 +75,18 @@ impl MessageListState {
     }
 }
 
+/// Finds the tool name for a result by scanning backwards for the matching ToolCall.
+/// Free function to avoid borrowing `self` (which conflicts with mutable layout borrows).
+fn find_tool_name_for_result<'a>(items: &'a [crate::inference::ContextItem], call_id: &str, before: usize) -> &'a str {
+    for item in items[..before].iter().rev() {
+        if let crate::inference::ContextItem::ToolCall(tc) = item
+            && tc.call_id == call_id {
+                return &tc.name;
+        }
+    }
+    "unknown"
+}
+
 /// Scrollable conversation view component.
 /// Created fresh each frame with references to state and data.
 pub struct MessageList<'a> {
@@ -119,11 +132,21 @@ impl<'a> Component for MessageList<'a> {
         // and self.state is &mut MessageListState
         let layout = &mut self.state.layout;
         let reusable = layout.reusable_count(num_items, content_width, self.is_loading, &self.context.items);
-        
+
         layout.heights.truncate(reusable.min(layout.heights.len()));
-        
-        for seg in self.context.items.iter().skip(layout.heights.len()) {
-            layout.heights.push(Message::calculate_height(seg, content_width));
+
+        for (i, item) in self.context.items.iter().enumerate().skip(layout.heights.len()) {
+            let height = match item {
+                crate::inference::ContextItem::Message(seg) => Message::calculate_height(seg, content_width),
+                crate::inference::ContextItem::ToolCall(tc) => {
+                    ToolMessage::new(ToolMessageKind::Call(tc)).calculate_height(content_width)
+                }
+                crate::inference::ContextItem::ToolResult(tr) => {
+                    let name = find_tool_name_for_result(&self.context.items, &tr.call_id, i);
+                    ToolMessage::new(ToolMessageKind::Result(tr, name)).calculate_height(content_width)
+                }
+            };
+            layout.heights.push(height);
         }
         layout.rebuild_prefix_heights();
         layout.update_metadata(num_items, content_width);
@@ -132,7 +155,7 @@ impl<'a> Component for MessageList<'a> {
 
         // Pre-compute ghost loader state (used for both total_height and rendering)
         let ghost = if self.is_loading && self.context.items.last().is_some_and(|last| {
-            matches!(last.source, Source::User | Source::Directive)
+            matches!(last, crate::inference::ContextItem::Message(seg) if matches!(seg.source, Source::User | Source::Directive))
         }) {
             let seg = self.ghost_segment();
             let height = Message::calculate_height(&seg, content_width);
@@ -162,30 +185,36 @@ impl<'a> Component for MessageList<'a> {
         };
 
         for i in visible_range.clone() {
-            let seg = &self.context.items[i];
+            let item = &self.context.items[i];
             let height = self.state.layout.heights[i];
-            
-            let is_last = i == num_items.saturating_sub(1);
-            // Check hover status safely using state
-            let is_hovered = self.state.hovered_index == Some(i) && !(is_last && self.is_loading);
-            
-            // Only pulse if this is a Model/Thinking message that is actively generating
-            // We never pulse User messages anymore (we show the ghost loader instead)
-            let is_volatile = matches!(seg.source, Source::Model | Source::Thinking | Source::Status);
-            let pulse_intensity = if is_last && self.is_loading && is_volatile { 
-                self.pulse_value 
-            } else { 
-                0.0 
-            };
 
-            // Create the transient Message component logic
-            let message = Message::new(seg, is_hovered, pulse_intensity);
-            
+            let is_last = i == num_items.saturating_sub(1);
+            let is_hovered = self.state.hovered_index == Some(i) && !(is_last && self.is_loading);
+
             let segment_rect = Rect::new(0, y_offset, content_width, height);
-            
-            // Since Message implements Widget, we can render it directly into ScrollView
-            scroll_view.render_widget(message, segment_rect);
-            
+
+            match item {
+                crate::inference::ContextItem::Message(seg) => {
+                    let is_volatile = matches!(seg.source, Source::Model | Source::Thinking | Source::Status);
+                    let pulse_intensity = if is_last && self.is_loading && is_volatile {
+                        self.pulse_value
+                    } else {
+                        0.0
+                    };
+                    let message = Message::new(seg, is_hovered, pulse_intensity);
+                    scroll_view.render_widget(message, segment_rect);
+                }
+                crate::inference::ContextItem::ToolCall(tc) => {
+                    let tool_msg = ToolMessage::new(ToolMessageKind::Call(tc));
+                    scroll_view.render_widget(tool_msg, segment_rect);
+                }
+                crate::inference::ContextItem::ToolResult(tr) => {
+                    let name = find_tool_name_for_result(&self.context.items, &tr.call_id, i);
+                    let tool_msg = ToolMessage::new(ToolMessageKind::Result(tr, name));
+                    scroll_view.render_widget(tool_msg, segment_rect);
+                }
+            }
+
             y_offset += height;
         }
 
@@ -273,7 +302,7 @@ impl LayoutCache {
         }
     }
 
-    pub fn reusable_count(&self, message_count: usize, content_width: u16, is_loading: bool, items: &[crate::inference::ContextSegment]) -> usize {
+    pub fn reusable_count(&self, message_count: usize, content_width: u16, is_loading: bool, items: &[crate::inference::ContextItem]) -> usize {
         if self.content_width != content_width || self.heights.is_empty() {
             return 0;
         }
@@ -288,11 +317,12 @@ impl LayoutCache {
             return message_count;
         }
 
-        // If loading, check if the last message is volatile (Model/Thinking).
-        // Stable sources (User/Directive) don't need re-measurement.
-        let last_is_stable = items
-            .last()
-            .is_some_and(|last| matches!(last.source, Source::User | Source::Directive));
+        // If loading, check if the last item is volatile.
+        // Tool calls/results are stable once written. Messages from Model/Thinking are volatile.
+        let last_is_stable = items.last().is_some_and(|last| match last {
+            crate::inference::ContextItem::Message(seg) => matches!(seg.source, Source::User | Source::Directive),
+            crate::inference::ContextItem::ToolCall(_) | crate::inference::ContextItem::ToolResult(_) => true,
+        });
 
         if last_is_stable {
             message_count
@@ -348,18 +378,18 @@ mod tests {
         assert_eq!(cache.reusable_count(5, 40, false, &[]), 0);
         
         // Case 4: Loading (last message is volatile) -> n-1 reusable
-        let volatile_items = vec![crate::inference::ContextSegment {
+        let volatile_items = vec![crate::inference::ContextItem::Message(crate::inference::ContextSegment {
              source: Source::Model,
              content: String::new()
-        }];
+        })];
         cache.update_metadata(1, 80);
         assert_eq!(cache.reusable_count(1, 80, true, &volatile_items), 0);
 
         // Case 5: Loading (last message is stable) -> n reusable
-        let stable_items = vec![crate::inference::ContextSegment {
+        let stable_items = vec![crate::inference::ContextItem::Message(crate::inference::ContextSegment {
              source: Source::User,
              content: String::new()
-        }];
+        })];
         cache.update_metadata(1, 80);
         assert_eq!(cache.reusable_count(1, 80, true, &stable_items), 1);
     }

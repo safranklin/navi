@@ -19,7 +19,7 @@ fn main() {
     let mut entries: Vec<_> = fs::read_dir(asset_dir)
         .unwrap()
         .map(|res| res.unwrap().path())
-        .filter(|path| path.extension().map_or(false, |ext| ext == "txt"))
+        .filter(|path| path.extension().is_some_and(|ext| ext == "txt"))
         .collect();
 
     entries.sort();

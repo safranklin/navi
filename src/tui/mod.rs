@@ -129,7 +129,7 @@ pub fn run(provider_choice: Provider) -> std::io::Result<()> {
 
         // Determine if animations are running (landing page or loading spinner)
         let has_visible_messages = app.context.items.iter().any(|item|
-            matches!(item.source, crate::inference::Source::User | crate::inference::Source::Model)
+            matches!(item, crate::inference::ContextItem::Message(seg) if matches!(seg.source, crate::inference::Source::User | crate::inference::Source::Model))
         );
         let animating = app.is_loading || !has_visible_messages;
 
@@ -235,12 +235,26 @@ pub fn run(provider_choice: Provider) -> std::io::Result<()> {
                 Effect::SpawnRequest => {
                     spawn_request(&app, tx.clone());
                 }
+                Effect::ExecuteTool(tool_call) => {
+                    spawn_tool_execution(tool_call, tx.clone());
+                }
                 _ => {}
             }
         }
     }
     ratatui::restore();
     Ok(())
+}
+
+fn spawn_tool_execution(tool_call: crate::inference::ToolCall, tx: mpsc::Sender<Action>) {
+    info!("Spawning tool execution: {} (call_id={})", tool_call.name, tool_call.call_id);
+    tokio::spawn(async move {
+        let output = crate::core::tools::execute(&tool_call).await;
+        let _ = tx.send(Action::ToolResultReady {
+            call_id: tool_call.call_id,
+            output,
+        });
+    });
 }
 
 fn spawn_request(app: &App, tx: mpsc::Sender<Action>) {
@@ -251,6 +265,7 @@ fn spawn_request(app: &App, tx: mpsc::Sender<Action>) {
     let context = app.context.clone();
     let model = app.model_name.clone();
     let effort = app.effort;
+    let tools = app.tools.clone();
 
     // Async channel for streaming chunks
     let (chunk_tx, mut chunk_rx) = tokio::sync::mpsc::channel::<StreamChunk>(100);
@@ -264,6 +279,7 @@ fn spawn_request(app: &App, tx: mpsc::Sender<Action>) {
             context: &context,
             model: &model,
             effort,
+            tools: &tools,
         };
 
         if let Err(e) = provider.stream_completion(request, chunk_tx).await {
@@ -288,6 +304,10 @@ fn spawn_request(app: &App, tx: mpsc::Sender<Action>) {
                 StreamChunk::Thinking(t) => {
                     debug!("Forwarding Action::ThinkingChunk (len={})", t.len());
                     let _ = tx.send(Action::ThinkingChunk(t));
+                }
+                StreamChunk::ToolCall(tc) => {
+                    debug!("Forwarding ToolCall: {} (call_id={})", tc.name, tc.call_id);
+                    let _ = tx.send(Action::ToolCallReceived(tc));
                 }
             }
         }

@@ -11,7 +11,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::Sender;
 
 use crate::inference::{
-    CompletionProvider, CompletionRequest, Context, Effort, ProviderError, Source, StreamChunk,
+    CompletionProvider, CompletionRequest, Context, ContextItem, Effort, ProviderError, Source,
+    StreamChunk, ToolDefinition,
 };
 
 // ============================================================================
@@ -27,11 +28,26 @@ enum Role {
     Assistant,
 }
 
-/// A single message in the input array
+/// Polymorphic input item for the Responses API input array.
+/// Messages, function calls, and function call outputs are peers at the same level.
 #[derive(Serialize, Debug, Clone)]
-struct InputMessage {
-    role: Role,
-    content: String,
+#[serde(tag = "type")]
+enum InputItem {
+    #[serde(rename = "message")]
+    Message { role: Role, content: String },
+    #[serde(rename = "function_call")]
+    FunctionCall {
+        id: String,
+        call_id: String,
+        name: String,
+        arguments: String,
+    },
+    #[serde(rename = "function_call_output")]
+    FunctionCallOutput {
+        id: String,
+        call_id: String,
+        output: String,
+    },
 }
 
 /// Configuration for reasoning tokens
@@ -43,14 +59,26 @@ struct Reasoning {
     enabled: Option<bool>,
 }
 
+/// Tool definition for the API request
+#[derive(Serialize, Debug)]
+struct ApiToolDefinition {
+    #[serde(rename = "type")]
+    tool_type: &'static str, // always "function"
+    name: String,
+    description: String,
+    parameters: serde_json::Value,
+}
+
 /// The request body for the Responses API
 #[derive(Serialize, Debug)]
 struct ResponsesRequest {
     model: String,
-    input: Vec<InputMessage>,
+    input: Vec<InputItem>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub stream: Option<bool>,
-    pub reasoning: Reasoning,
+    stream: Option<bool>,
+    reasoning: Reasoning,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<ApiToolDefinition>>,
 }
 
 /// Generic SSE event wrapper to extract the type field
@@ -63,30 +91,93 @@ struct SseEvent {
     delta: String,
 }
 
+/// SSE event for response.output_item.added (detects function_call output items)
+#[derive(Deserialize, Debug)]
+struct OutputItemAddedEvent {
+    item: OutputItemData,
+}
+
+#[derive(Deserialize, Debug)]
+struct OutputItemData {
+    #[serde(rename = "type")]
+    item_type: String,
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    call_id: String,
+    #[serde(default)]
+    name: String,
+}
+
+/// SSE event for response.function_call_arguments.done
+/// Note: this event has `item_id` (not `call_id`). The call_id comes from
+/// the earlier `response.output_item.added` event and must be captured there.
+#[derive(Deserialize, Debug)]
+struct FunctionCallArgsDoneEvent {
+    name: String,
+    arguments: String,
+}
+
 // ============================================================================
 // Translation Layer
 // ============================================================================
 
 /// Converts Navi's Context into Responses API input format.
 ///
+/// Produces a polymorphic input array: messages, function calls, and function call outputs.
 /// Filters out Thinking segments (reasoning is model-generated, not input).
-fn context_to_input(context: &Context) -> Vec<InputMessage> {
+fn context_to_input(context: &Context) -> Vec<InputItem> {
+    let mut fco_counter = 0usize;
     context
         .items
         .iter()
-        .filter_map(|item| {
-            match item.source {
-                Source::Directive => Some(Role::System),
-                Source::User => Some(Role::User),
-                Source::Model => Some(Role::Assistant),
-                Source::Thinking | Source::Status => None, // Skip non-conversational items
+        .filter_map(|item| match item {
+            ContextItem::Message(seg) => {
+                match seg.source {
+                    Source::Directive => Some(Role::System),
+                    Source::User => Some(Role::User),
+                    Source::Model => Some(Role::Assistant),
+                    Source::Thinking | Source::Status => None,
+                }
+                .map(|role| InputItem::Message {
+                    role,
+                    content: seg.content.clone(),
+                })
             }
-            .map(|role| InputMessage {
-                role,
-                content: item.content.clone(),
-            })
+            ContextItem::ToolCall(tc) => Some(InputItem::FunctionCall {
+                id: tc.id.clone(),
+                call_id: tc.call_id.clone(),
+                name: tc.name.clone(),
+                arguments: tc.arguments.clone(),
+            }),
+            ContextItem::ToolResult(tr) => {
+                fco_counter += 1;
+                Some(InputItem::FunctionCallOutput {
+                    id: format!("fco_{fco_counter}"),
+                    call_id: tr.call_id.clone(),
+                    output: tr.output.clone(),
+                })
+            }
         })
         .collect()
+}
+
+/// Converts tool definitions to API format. Returns None if empty (omitted from JSON).
+fn tools_to_api(tools: &[ToolDefinition]) -> Option<Vec<ApiToolDefinition>> {
+    if tools.is_empty() {
+        return None;
+    }
+    Some(
+        tools
+            .iter()
+            .map(|t| ApiToolDefinition {
+                tool_type: "function",
+                name: t.name.clone(),
+                description: t.description.clone(),
+                parameters: t.parameters.clone(),
+            })
+            .collect(),
+    )
 }
 
 /// Maps our Effort enum to a Reasoning config for the Responses API.
@@ -149,6 +240,7 @@ impl CompletionProvider for OpenRouterProvider {
             input,
             stream: Some(true),
             reasoning,
+            tools: tools_to_api(request.tools),
         };
 
         info!(
@@ -192,6 +284,12 @@ impl CompletionProvider for OpenRouterProvider {
         let mut total_content_len = 0usize;
         let mut chunk_count = 0usize;
         let mut response = response;
+
+        // Tool call buffering state
+        let mut pending_tool_id: Option<String> = None;
+        let mut pending_tool_call_id: Option<String> = None;
+        let mut _pending_tool_name: Option<String> = None;
+        let mut pending_tool_args = String::new();
 
         while let Some(chunk) = response
             .chunk()
@@ -276,6 +374,40 @@ impl CompletionProvider for OpenRouterProvider {
                                 }
                             }
                         }
+                        Some("response.output_item.added") => {
+                            if let Ok(event) = serde_json::from_str::<OutputItemAddedEvent>(data)
+                                && event.item.item_type == "function_call" {
+                                    debug!("Tool call started: {} (id={}, call_id={})", event.item.name, event.item.id, event.item.call_id);
+                                    pending_tool_id = Some(event.item.id);
+                                    pending_tool_call_id = Some(event.item.call_id);
+                                    _pending_tool_name = Some(event.item.name);
+                                    pending_tool_args.clear();
+                            }
+                        }
+                        Some("response.function_call_arguments.delta") => {
+                            if let Ok(event) = serde_json::from_str::<SseEvent>(data) {
+                                pending_tool_args.push_str(&event.delta);
+                            }
+                        }
+                        Some("response.function_call_arguments.done") => {
+                            if let Ok(event) = serde_json::from_str::<FunctionCallArgsDoneEvent>(data) {
+                                let call_id = pending_tool_call_id.take().unwrap_or_default();
+                                let tool_call = crate::inference::ToolCall {
+                                    id: pending_tool_id.take().unwrap_or_default(),
+                                    call_id,
+                                    name: event.name.clone(),
+                                    arguments: event.arguments,
+                                };
+                                debug!("Tool call complete: {} (call_id={})", event.name, tool_call.call_id);
+                                _pending_tool_name = None;
+                                pending_tool_args.clear();
+                                chunk_count += 1;
+                                if sender.send(StreamChunk::ToolCall(tool_call)).await.is_err() {
+                                    warn!("ToolCall send failed: receiver dropped");
+                                    return Err(ProviderError::ChannelClosed);
+                                }
+                            }
+                        }
                         Some("response.completed") => {
                             info!(
                                 "Stream complete: {} chunks, {} total content bytes",
@@ -333,17 +465,14 @@ mod tests {
         // Should have 3 items: Directive (from Context::new), User, and Model
         // Thinking should be filtered out
         assert_eq!(input.len(), 3);
-        assert!(matches!(input[0].role, Role::System));
-        assert!(matches!(input[1].role, Role::User));
-        assert_eq!(input[1].content, "Hello");
-        assert!(matches!(input[2].role, Role::Assistant));
-        assert_eq!(input[2].content, "Response");
+        assert!(matches!(&input[0], InputItem::Message { role: Role::System, .. }));
+        assert!(matches!(&input[1], InputItem::Message { role: Role::User, content } if content == "Hello"));
+        assert!(matches!(&input[2], InputItem::Message { role: Role::Assistant, content } if content == "Response"));
     }
 
     #[test]
     fn test_context_to_input_translates_roles_correctly() {
         let mut context = Context::new();
-        // Clear default directive for this test
         context.items.clear();
 
         context.add(ContextSegment {
@@ -362,12 +491,9 @@ mod tests {
         let input = context_to_input(&context);
 
         assert_eq!(input.len(), 3);
-        assert!(matches!(input[0].role, Role::System));
-        assert_eq!(input[0].content, "System message");
-        assert!(matches!(input[1].role, Role::User));
-        assert_eq!(input[1].content, "User message");
-        assert!(matches!(input[2].role, Role::Assistant));
-        assert_eq!(input[2].content, "Model message");
+        assert!(matches!(&input[0], InputItem::Message { role: Role::System, content } if content == "System message"));
+        assert!(matches!(&input[1], InputItem::Message { role: Role::User, content } if content == "User message"));
+        assert!(matches!(&input[2], InputItem::Message { role: Role::Assistant, content } if content == "Model message"));
     }
 
     #[test]
@@ -384,15 +510,16 @@ mod tests {
     }
 
     #[test]
-    fn test_input_message_serializes_correctly() {
-        let msg = InputMessage {
+    fn test_input_item_message_serializes_correctly() {
+        let item = InputItem::Message {
             role: Role::User,
             content: "test".to_string(),
         };
 
-        let json = serde_json::to_string(&msg).unwrap();
+        let json = serde_json::to_string(&item).unwrap();
         assert!(json.contains(r#""role":"user"#));
         assert!(json.contains(r#""content":"test"#));
+        assert!(json.contains(r#""type":"message"#));
     }
 
     #[test]
@@ -414,11 +541,12 @@ mod tests {
             input: vec![],
             stream: None,
             reasoning: effort_to_reasoning(Effort::Auto),
+            tools: None,
         };
 
         let json = serde_json::to_string(&request).unwrap();
         assert!(!json.contains("stream"));
-        // Auto: {"enabled":true}, no effort key
+        assert!(!json.contains("tools"));
         assert!(json.contains(r#""enabled":true"#));
         assert!(!json.contains(r#""effort""#));
     }
@@ -430,6 +558,7 @@ mod tests {
             input: vec![],
             stream: Some(true),
             reasoning: effort_to_reasoning(Effort::High),
+            tools: None,
         };
 
         let json = serde_json::to_string(&request).unwrap();
@@ -444,6 +573,7 @@ mod tests {
             input: vec![],
             stream: Some(true),
             reasoning: effort_to_reasoning(Effort::None),
+            tools: None,
         };
 
         let json = serde_json::to_string(&request).unwrap();

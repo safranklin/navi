@@ -22,8 +22,8 @@ pub fn draw_ui(frame: &mut Frame, app: &App, tui: &mut TuiState, spinner_frame: 
     // Rendered first so MessageList::render updates layout cache in TuiState.
     
     // Check if there are any user-visible messages (User or Model)
-    let has_visible_messages = app.context.items.iter().any(|item| 
-        matches!(item.source, crate::inference::Source::User | crate::inference::Source::Model)
+    let has_visible_messages = app.context.items.iter().any(|item|
+        matches!(item, crate::inference::ContextItem::Message(seg) if matches!(seg.source, crate::inference::Source::User | crate::inference::Source::Model))
     );
 
     if let Some(error_msg) = &app.error {

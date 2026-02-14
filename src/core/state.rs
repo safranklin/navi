@@ -11,14 +11,17 @@
 //! ├── model_name: String            // current model
 //! ├── is_loading: bool              // waiting for API
 //! ├── effort: Effort                // reasoning effort level
-//! └── error: Option<String>         // error message
+//! ├── error: Option<String>         // error message
+//! ├── tools: Vec<ToolDefinition>    // available tools
+//! └── pending_tool_calls: HashSet   // call_ids awaiting results
 //! ```
 //!
 //! State changes only happen through `update(state, action)` in action.rs.
 //! This keeps things predictable, so no surprise mutations.
 
+use std::collections::HashSet;
 use std::sync::Arc;
-use crate::inference::{CompletionProvider, Context, Effort};
+use crate::inference::{CompletionProvider, Context, Effort, ToolDefinition};
 
 pub struct App {
     pub provider: Arc<dyn CompletionProvider>,
@@ -28,6 +31,8 @@ pub struct App {
     pub is_loading: bool,
     pub effort: Effort,
     pub error: Option<String>,
+    pub tools: Vec<ToolDefinition>,
+    pub pending_tool_calls: HashSet<String>, // call_ids awaiting results
 }
 
 impl App {
@@ -40,6 +45,8 @@ impl App {
             is_loading: false,
             effort: Effort::default(),
             error: None,
+            tools: crate::core::tools::available(),
+            pending_tool_calls: HashSet::new(),
         }
     }
 }
