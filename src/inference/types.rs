@@ -344,6 +344,24 @@ mod tests {
     }
 
     #[test]
+    fn test_append_model_message_skips_whitespace_only_creation() {
+        let mut ctx = Context::new();
+        // Whitespace-only should NOT create a new model message
+        ctx.append_to_last_model_message("\n\n");
+        assert_eq!(ctx.items.len(), 1); // Only system directive
+
+        // Real content should create one
+        ctx.append_to_last_model_message("Hello");
+        assert_eq!(ctx.items.len(), 2);
+        assert_eq!(unwrap_message(&ctx.items[1]).content, "Hello");
+
+        // Whitespace APPENDED to existing model message is fine
+        ctx.append_to_last_model_message("\n\n");
+        assert_eq!(ctx.items.len(), 2); // Still 2, appended to existing
+        assert_eq!(unwrap_message(&ctx.items[1]).content, "Hello\n\n");
+    }
+
+    #[test]
     fn test_append_normalizes_content() {
         let mut ctx = Context::new();
         // Case 1: Typography in new message
