@@ -4,8 +4,10 @@
 //! Each tool is a struct that implements the `Tool` trait, which ties together
 //! name, description, args, output, and execution logic in one impl block.
 //!
-//! //! `DynTool` is the object-safe bridge trait that enables dynamic dispatch despite
+//! `DynTool` is the object-safe bridge trait that enables dynamic dispatch despite
 //! `Tool` having associated types. A blanket impl converts any `T: Tool` into `dyn DynTool`.
+
+pub mod arithmetic;
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -43,12 +45,17 @@ pub trait Tool: Send + Sync {
 
 #[async_trait]
 trait DynTool: Send + Sync {
+    fn name(&self) -> &'static str;
     fn definition(&self) -> ToolDefinition;
     async fn execute(&self, args_json: &str) -> String;
 }
 
 #[async_trait]
 impl<T: Tool> DynTool for T {
+    fn name(&self) -> &'static str {
+        T::NAME
+    }
+
     fn definition(&self) -> ToolDefinition {
         let schema = schemars::schema_for!(T::Args);
         ToolDefinition {
@@ -96,8 +103,7 @@ impl ToolRegistry {
 
     pub async fn execute(&self, tool_call: &ToolCall) -> String {
         for tool in &self.tools {
-            let def = tool.definition();
-            if def.name == tool_call.name {
+            if tool.name() == tool_call.name {
                 return tool.execute(&tool_call.arguments).await;
             }
         }
@@ -108,37 +114,11 @@ impl ToolRegistry {
 /// Creates a registry with all built-in tools.
 pub fn default_registry() -> ToolRegistry {
     let mut registry = ToolRegistry::new();
-    registry.register(AddTool);
+    registry.register(arithmetic::AddTool);
+    registry.register(arithmetic::SubtractTool);
+    registry.register(arithmetic::MultiplyTool);
+    registry.register(arithmetic::DivideTool);
     registry
-}
-
-// ── Built-in tools ──────────────────────────────────────────────────────────
-
-pub struct AddTool;
-
-#[derive(Deserialize, JsonSchema)]
-pub struct AddArgs {
-    /// First number
-    a: i64,
-    /// Second number
-    b: i64,
-}
-
-#[derive(Serialize)]
-pub struct AddOutput {
-    result: i64,
-}
-
-#[async_trait]
-impl Tool for AddTool {
-    const NAME: &'static str = "add";
-    const DESCRIPTION: &'static str = "Adds two integers and returns their sum.";
-    type Args = AddArgs;
-    type Output = AddOutput;
-
-    async fn call(&self, args: AddArgs) -> Result<AddOutput, ToolError> {
-        Ok(AddOutput { result: args.a + args.b })
-    }
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────
@@ -146,11 +126,12 @@ impl Tool for AddTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arithmetic::{AddTool, AddArgs};
 
     #[tokio::test]
     async fn test_add_tool_direct() {
-        let result = AddTool.call(AddArgs { a: 3, b: 7 }).await.unwrap();
-        assert_eq!(result.result, 10);
+        let result = AddTool.call(AddArgs { a: 3.0, b: 7.0 }).await.unwrap();
+        assert_eq!(result.result, 10.0);
     }
 
     #[tokio::test]
@@ -163,7 +144,7 @@ mod tests {
             arguments: r#"{"a": 3, "b": 7}"#.into(),
         };
         let result = registry.execute(&tc).await;
-        assert_eq!(result, r#"{"result":10}"#);
+        assert_eq!(result, r#"{"result":10.0}"#);
     }
 
     #[tokio::test]
@@ -196,7 +177,7 @@ mod tests {
     fn test_definitions_include_add() {
         let registry = default_registry();
         let defs = registry.definitions();
-        assert_eq!(defs.len(), 1);
+        assert_eq!(defs.len(), 4);
         assert_eq!(defs[0].name, "add");
     }
 

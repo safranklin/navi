@@ -13,7 +13,7 @@
 //! This makes everything testable: `assert_eq!(update(state, action), expected)`.
 //! And debuggable: log every action, replay the exact session.
 
-use log::debug;
+use log::{debug, warn};
 use crate::core::state::App;
 use crate::inference::{ToolCall, ToolResult};
 
@@ -85,6 +85,10 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
             Effect::Render
         }
         Action::ToolCallReceived(tool_call) => {
+            if tool_call.call_id.is_empty() {
+                warn!("Received tool call with empty call_id, skipping: {}", tool_call.name);
+                return Effect::Render;
+            }
             app_state.pending_tool_calls.insert(tool_call.call_id.clone());
             app_state.context.add_tool_call(tool_call.clone());
             app_state.status_message = format!("Calling: {}...", tool_call.name);

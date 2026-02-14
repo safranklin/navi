@@ -5,6 +5,8 @@
 //! - "role" (not "source")
 //! - SSE events: response.output_text.delta, response.reasoning_summary_text.delta
 
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
@@ -109,13 +111,27 @@ struct OutputItemData {
     name: String,
 }
 
+/// SSE event for response.function_call_arguments.delta
+#[derive(Deserialize, Debug)]
+struct FunctionCallArgsDeltaEvent {
+    item_id: String,
+    #[allow(dead_code)]
+    delta: String,
+}
+
 /// SSE event for response.function_call_arguments.done
-/// Note: this event has `item_id` (not `call_id`). The call_id comes from
-/// the earlier `response.output_item.added` event and must be captured there.
+/// The `item_id` correlates back to the `output_item.added` event's `item.id`.
 #[derive(Deserialize, Debug)]
 struct FunctionCallArgsDoneEvent {
+    item_id: String,
     name: String,
     arguments: String,
+}
+
+/// Tracks a tool call across multiple SSE events (added → delta* → done).
+struct PendingToolCall {
+    id: String,      // API object ID (e.g. "fc_abc123")
+    call_id: String,  // Correlation ID (e.g. "call_xyz789")
 }
 
 // ============================================================================
@@ -285,11 +301,8 @@ impl CompletionProvider for OpenRouterProvider {
         let mut chunk_count = 0usize;
         let mut response = response;
 
-        // Tool call buffering state
-        let mut pending_tool_id: Option<String> = None;
-        let mut pending_tool_call_id: Option<String> = None;
-        let mut _pending_tool_name: Option<String> = None;
-        let mut pending_tool_args = String::new();
+        // Tool call state: tracks concurrent tool calls by item_id
+        let mut pending_tools: HashMap<String, PendingToolCall> = HashMap::new();
 
         while let Some(chunk) = response
             .chunk()
@@ -377,30 +390,38 @@ impl CompletionProvider for OpenRouterProvider {
                         Some("response.output_item.added") => {
                             if let Ok(event) = serde_json::from_str::<OutputItemAddedEvent>(data)
                                 && event.item.item_type == "function_call" {
-                                    debug!("Tool call started: {} (id={}, call_id={})", event.item.name, event.item.id, event.item.call_id);
-                                    pending_tool_id = Some(event.item.id);
-                                    pending_tool_call_id = Some(event.item.call_id);
-                                    _pending_tool_name = Some(event.item.name);
-                                    pending_tool_args.clear();
+                                    debug!("Tool call started: {} (item_id={}, call_id={})", event.item.name, event.item.id, event.item.call_id);
+                                    pending_tools.insert(event.item.id.clone(), PendingToolCall {
+                                        id: event.item.id,
+                                        call_id: event.item.call_id,
+                                    });
                             }
                         }
                         Some("response.function_call_arguments.delta") => {
-                            if let Ok(event) = serde_json::from_str::<SseEvent>(data) {
-                                pending_tool_args.push_str(&event.delta);
+                            // Delta events are ignored — the done event contains the full arguments.
+                            // We parse the event only to validate the item_id correlation.
+                            if let Ok(event) = serde_json::from_str::<FunctionCallArgsDeltaEvent>(data)
+                                && !pending_tools.contains_key(&event.item_id) {
+                                    warn!("Argument delta for unknown item_id: {}", event.item_id);
                             }
                         }
                         Some("response.function_call_arguments.done") => {
                             if let Ok(event) = serde_json::from_str::<FunctionCallArgsDoneEvent>(data) {
-                                let call_id = pending_tool_call_id.take().unwrap_or_default();
+                                let pending = pending_tools.remove(&event.item_id);
+                                let (id, call_id) = match pending {
+                                    Some(p) => (p.id, p.call_id),
+                                    None => {
+                                        warn!("arguments.done for unknown item_id: {}, skipping", event.item_id);
+                                        continue;
+                                    }
+                                };
                                 let tool_call = crate::inference::ToolCall {
-                                    id: pending_tool_id.take().unwrap_or_default(),
+                                    id,
                                     call_id,
                                     name: event.name.clone(),
                                     arguments: event.arguments,
                                 };
-                                debug!("Tool call complete: {} (call_id={})", event.name, tool_call.call_id);
-                                _pending_tool_name = None;
-                                pending_tool_args.clear();
+                                debug!("Tool call complete: {} (item_id={}, call_id={})", event.name, event.item_id, tool_call.call_id);
                                 chunk_count += 1;
                                 if sender.send(StreamChunk::ToolCall(tool_call)).await.is_err() {
                                     warn!("ToolCall send failed: receiver dropped");
