@@ -121,7 +121,12 @@ impl Context {
                 return;
             }
 
-        // If we get here, either no items or last item is not a model message
+        // Don't create a new model message for whitespace-only content.
+        // The API sometimes sends empty text deltas before reasoning/tool calls.
+        if normalized.trim().is_empty() {
+            return;
+        }
+
         self.add(ContextSegment {
             source: Source::Model,
             content: normalized,
