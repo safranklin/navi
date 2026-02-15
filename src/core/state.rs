@@ -13,7 +13,8 @@
 //! ├── effort: Effort                // reasoning effort level
 //! ├── error: Option<String>         // error message
 //! ├── registry: Arc<ToolRegistry>   // tool registry
-//! └── pending_tool_calls: HashSet   // call_ids awaiting results
+//! ├── pending_tool_calls: HashSet   // call_ids awaiting results
+//! └── agentic_rounds: u8           // loop iteration counter
 //! ```
 //!
 //! State changes only happen through `update(state, action)` in action.rs.
@@ -23,6 +24,9 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use crate::core::tools::ToolRegistry;
 use crate::inference::{CompletionProvider, Context, Effort, ToolDefinition};
+
+/// Maximum number of agentic tool-calling rounds before the loop is forcibly stopped.
+pub const MAX_AGENTIC_ROUNDS: u8 = 20;
 
 pub struct App {
     pub provider: Arc<dyn CompletionProvider>,
@@ -34,6 +38,7 @@ pub struct App {
     pub error: Option<String>,
     pub registry: Arc<ToolRegistry>,
     pub pending_tool_calls: HashSet<String>, // call_ids awaiting results
+    pub agentic_rounds: u8,
 }
 
 impl App {
@@ -48,6 +53,7 @@ impl App {
             error: None,
             registry: Arc::new(crate::core::tools::default_registry()),
             pending_tool_calls: HashSet::new(),
+            agentic_rounds: 0,
         }
     }
 

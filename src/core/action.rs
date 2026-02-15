@@ -14,7 +14,7 @@
 //! And debuggable: log every action, replay the exact session.
 
 use log::{debug, warn};
-use crate::core::state::App;
+use crate::core::state::{App, MAX_AGENTIC_ROUNDS};
 use crate::inference::{ToolCall, ToolResult};
 
 #[derive(Debug)]
@@ -55,6 +55,7 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
             }
             app_state.context.add_user_message(message);
             app_state.is_loading = true;
+            app_state.agentic_rounds = 0;
             app_state.status_message = String::from("Loading...");
             Effect::SpawnRequest
         }
@@ -102,8 +103,20 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
             });
 
             if app_state.pending_tool_calls.is_empty() {
-                app_state.status_message = String::from("Resuming...");
-                Effect::SpawnRequest
+                app_state.agentic_rounds += 1;
+                if app_state.agentic_rounds > MAX_AGENTIC_ROUNDS {
+                    warn!("Agentic loop limit reached ({} rounds)", MAX_AGENTIC_ROUNDS);
+                    app_state.is_loading = false;
+                    app_state.error = Some(format!(
+                        "Agentic loop stopped after {} rounds. The model may be stuck in a tool-calling loop.",
+                        MAX_AGENTIC_ROUNDS
+                    ));
+                    app_state.status_message = String::from("Loop limit reached.");
+                    Effect::Render
+                } else {
+                    app_state.status_message = String::from("Resuming...");
+                    Effect::SpawnRequest
+                }
             } else {
                 app_state.status_message = format!(
                     "Waiting for {} more tool(s)...",
@@ -233,6 +246,51 @@ mod tests {
         assert_eq!(app.pending_tool_calls.len(), 1);
         assert_eq!(effect, Effect::Render);
         assert!(app.status_message.contains("1 more"));
+    }
+
+    #[test]
+    fn test_tool_call_with_empty_call_id_is_skipped() {
+        let mut app = test_app();
+        app.is_loading = true;
+        let tc = ToolCall {
+            id: "fc_1".into(),
+            call_id: String::new(),
+            name: "add".into(),
+            arguments: "{}".into(),
+        };
+        let effect = update(&mut app, Action::ToolCallReceived(tc));
+        assert_eq!(effect, Effect::Render);
+        assert!(app.pending_tool_calls.is_empty());
+    }
+
+    #[test]
+    fn test_agentic_loop_bound_enforced() {
+        use crate::core::state::MAX_AGENTIC_ROUNDS;
+
+        let mut app = test_app();
+        app.is_loading = true;
+        app.agentic_rounds = MAX_AGENTIC_ROUNDS;
+        app.pending_tool_calls.insert("call_1".to_string());
+
+        let effect = update(&mut app, Action::ToolResultReady {
+            call_id: "call_1".to_string(),
+            output: r#"{"result": 42}"#.to_string(),
+        });
+
+        assert_eq!(effect, Effect::Render);
+        assert!(!app.is_loading);
+        assert!(app.error.is_some());
+        assert!(app.error.as_ref().unwrap().contains("loop"));
+    }
+
+    #[test]
+    fn test_agentic_rounds_reset_on_submit() {
+        let mut app = test_app();
+        app.agentic_rounds = 5;
+
+        update(&mut app, Action::Submit("hello".to_string()));
+
+        assert_eq!(app.agentic_rounds, 0);
     }
 
     #[test]
