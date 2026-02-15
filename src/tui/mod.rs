@@ -24,7 +24,7 @@ mod ui;
 mod component;
 mod components;
 
-use log::{debug, info};
+use log::{debug, info, warn};
 use std::env;
 use std::io::stdout;
 use std::sync::{mpsc, Arc};
@@ -253,11 +253,22 @@ fn spawn_tool_execution(
 ) {
     info!("Spawning tool execution: {} (call_id={})", tool_call.name, tool_call.call_id);
     tokio::spawn(async move {
-        let output = registry.execute(&tool_call).await;
-        let _ = tx.send(Action::ToolResultReady {
-            call_id: tool_call.call_id,
+        let output = match tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            registry.execute(&tool_call),
+        ).await {
+            Ok(result) => result,
+            Err(_) => {
+                warn!("Tool '{}' timed out after 30s (call_id={})", tool_call.name, tool_call.call_id);
+                serde_json::json!({"error": "Tool execution timed out after 30s"}).to_string()
+            }
+        };
+        if tx.send(Action::ToolResultReady {
+            call_id: tool_call.call_id.clone(),
             output,
-        });
+        }).is_err() {
+            warn!("Failed to send tool result for call_id={}: receiver dropped", tool_call.call_id);
+        }
     });
 }
 
@@ -288,7 +299,9 @@ fn spawn_request(app: &App, tx: mpsc::Sender<Action>) {
 
         if let Err(e) = provider.stream_completion(request, chunk_tx).await {
             info!("Stream error: {}", e);
-            let _ = tx_stream.send(Action::ResponseChunk(format!("\n[Error: {}]", e)));
+            if tx_stream.send(Action::ResponseChunk(format!("\n[Error: {}]", e))).is_err() {
+                warn!("Failed to send stream error action: receiver dropped");
+            }
         }
     });
 
@@ -303,20 +316,31 @@ fn spawn_request(app: &App, tx: mpsc::Sender<Action>) {
                 StreamChunk::Content(c) => {
                     total_content_len += c.len();
                     debug!("Forwarding Action::ResponseChunk (len={}, total={})", c.len(), total_content_len);
-                    let _ = tx.send(Action::ResponseChunk(c));
+                    if tx.send(Action::ResponseChunk(c)).is_err() {
+                        warn!("Failed to forward ResponseChunk: receiver dropped");
+                        return;
+                    }
                 }
                 StreamChunk::Thinking(t) => {
                     debug!("Forwarding Action::ThinkingChunk (len={})", t.len());
-                    let _ = tx.send(Action::ThinkingChunk(t));
+                    if tx.send(Action::ThinkingChunk(t)).is_err() {
+                        warn!("Failed to forward ThinkingChunk: receiver dropped");
+                        return;
+                    }
                 }
                 StreamChunk::ToolCall(tc) => {
                     debug!("Forwarding ToolCall: {} (call_id={})", tc.name, tc.call_id);
-                    let _ = tx.send(Action::ToolCallReceived(tc));
+                    if tx.send(Action::ToolCallReceived(tc)).is_err() {
+                        warn!("Failed to forward ToolCall: receiver dropped");
+                        return;
+                    }
                 }
             }
         }
 
         info!("Forwarding complete: {} actions, {} content bytes", forwarded_count, total_content_len);
-        let _ = tx.send(Action::ResponseDone);
+        if tx.send(Action::ResponseDone).is_err() {
+            warn!("Failed to send ResponseDone: receiver dropped");
+        }
     });
 }
