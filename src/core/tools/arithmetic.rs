@@ -22,7 +22,7 @@ pub struct AddArgs {
 }
 
 #[derive(Serialize)]
-pub struct AddOutput {
+pub struct ArithmeticOutput {
     pub result: f64,
 }
 
@@ -31,10 +31,10 @@ impl Tool for AddTool {
     const NAME: &'static str = "add";
     const DESCRIPTION: &'static str = "Adds two numbers and returns their sum.";
     type Args = AddArgs;
-    type Output = AddOutput;
+    type Output = ArithmeticOutput;
 
-    async fn call(&self, args: AddArgs) -> Result<AddOutput, ToolError> {
-        Ok(AddOutput { result: args.a + args.b })
+    async fn call(&self, args: AddArgs) -> Result<ArithmeticOutput, ToolError> {
+        Ok(ArithmeticOutput { result: args.a + args.b })
     }
 }
 
@@ -55,10 +55,10 @@ impl Tool for SubtractTool {
     const NAME: &'static str = "subtract";
     const DESCRIPTION: &'static str = "Subtracts the second number from the first.";
     type Args = SubtractArgs;
-    type Output = AddOutput;
+    type Output = ArithmeticOutput;
 
-    async fn call(&self, args: SubtractArgs) -> Result<AddOutput, ToolError> {
-        Ok(AddOutput { result: args.a - args.b })
+    async fn call(&self, args: SubtractArgs) -> Result<ArithmeticOutput, ToolError> {
+        Ok(ArithmeticOutput { result: args.a - args.b })
     }
 }
 
@@ -79,10 +79,10 @@ impl Tool for MultiplyTool {
     const NAME: &'static str = "multiply";
     const DESCRIPTION: &'static str = "Multiplies two numbers.";
     type Args = MultiplyArgs;
-    type Output = AddOutput;
+    type Output = ArithmeticOutput;
 
-    async fn call(&self, args: MultiplyArgs) -> Result<AddOutput, ToolError> {
-        Ok(AddOutput { result: args.a * args.b })
+    async fn call(&self, args: MultiplyArgs) -> Result<ArithmeticOutput, ToolError> {
+        Ok(ArithmeticOutput { result: args.a * args.b })
     }
 }
 
