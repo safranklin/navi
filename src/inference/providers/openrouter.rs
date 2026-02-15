@@ -266,7 +266,8 @@ impl CompletionProvider for OpenRouterProvider {
             request.effort
         );
 
-        let json_body = serde_json::to_string(&responses_request).unwrap_or_else(|_| "{}".to_string());
+        let json_body = serde_json::to_string(&responses_request)
+            .map_err(|e| ProviderError::Network(format!("Request serialization failed: {e}")))?;
         info!("Raw OpenRouter Request: {}", json_body);
 
         // Make the API request to the Responses endpoint
@@ -274,7 +275,8 @@ impl CompletionProvider for OpenRouterProvider {
             .client
             .post(format!("{}/responses", self.base_url))
             .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&responses_request)
+            .header("Content-Type", "application/json")
+            .body(json_body)
             .send()
             .await
             .map_err(|e| ProviderError::Network(e.to_string()))?;
@@ -452,6 +454,13 @@ impl CompletionProvider for OpenRouterProvider {
             }
         }
 
+        if !pending_tools.is_empty() {
+            warn!(
+                "Stream ended with {} unresolved tool call(s): {:?}",
+                pending_tools.len(),
+                pending_tools.keys().collect::<Vec<_>>()
+            );
+        }
         info!(
             "Stream ended: {} chunks processed, {} total content bytes",
             chunk_count, total_content_len
