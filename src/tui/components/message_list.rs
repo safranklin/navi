@@ -312,9 +312,20 @@ impl LayoutCache {
             return 0;
         }
 
-        // If not loading, everything essentially stable up to the count
+        // If not loading, most heights are stable — but the last Model/Thinking
+        // message may have grown during a streaming batch that completed between
+        // frames (loading flipped false before we recalculated its height).
         if !is_loading {
-            return message_count;
+            let last_is_volatile = items.last().is_some_and(|last| match last {
+                crate::inference::ContextItem::Message(seg) =>
+                    matches!(seg.source, Source::Model | Source::Thinking),
+                _ => false,
+            });
+            return if last_is_volatile {
+                message_count.saturating_sub(1)
+            } else {
+                message_count
+            };
         }
 
         // If loading, check if the last item is volatile.
@@ -392,5 +403,117 @@ mod tests {
         })];
         cache.update_metadata(1, 80);
         assert_eq!(cache.reusable_count(1, 80, true, &stable_items), 1);
+    }
+
+    #[test]
+    fn test_volatile_last_message_recalculated_after_loading() {
+        let mut cache = LayoutCache::new();
+        cache.heights = vec![3, 5];
+        cache.update_metadata(2, 80);
+
+        // Streaming just finished: is_loading=false, but last message is Model.
+        // Its cached height may be stale from a partial streaming frame.
+        let items = vec![
+            crate::inference::ContextItem::Message(crate::inference::ContextSegment {
+                source: Source::User,
+                content: "hello".into(),
+            }),
+            crate::inference::ContextItem::Message(crate::inference::ContextSegment {
+                source: Source::Model,
+                content: "full response".into(),
+            }),
+        ];
+
+        // Should exclude the volatile last item so its height gets recalculated
+        assert_eq!(cache.reusable_count(2, 80, false, &items), 1);
+
+        // Non-volatile last item (User) should trust the cache fully
+        let stable_items = vec![
+            crate::inference::ContextItem::Message(crate::inference::ContextSegment {
+                source: Source::Model,
+                content: "response".into(),
+            }),
+            crate::inference::ContextItem::Message(crate::inference::ContextSegment {
+                source: Source::User,
+                content: "follow-up".into(),
+            }),
+        ];
+        assert_eq!(cache.reusable_count(2, 80, false, &stable_items), 2);
+    }
+
+    /// Replays the exact sequence that triggers the stale-height bug:
+    /// 1. Cache built mid-stream with a short Model message (height 3)
+    /// 2. All remaining chunks arrive in one batch — loading flips to false
+    /// 3. The render loop must recalculate the Model message's height
+    ///    and get the taller (correct) value
+    #[test]
+    fn test_loading_transition_replaces_stale_height() {
+        use crate::inference::{ContextItem, ContextSegment};
+        use crate::tui::components::message::Message;
+
+        let width: u16 = 30;
+
+        let user_seg = ContextSegment { source: Source::User, content: "hi".into() };
+        let partial_model = ContextSegment { source: Source::Model, content: "short".into() };
+
+        // --- Frame 1: mid-stream, cache the partial model message ---
+        let items_streaming: Vec<ContextItem> = vec![
+            ContextItem::Message(user_seg.clone()),
+            ContextItem::Message(partial_model.clone()),
+        ];
+
+        let mut cache = LayoutCache::new();
+        let reusable = cache.reusable_count(2, width, true, &items_streaming);
+        cache.heights.truncate(reusable); // 0 — fresh cache
+
+        for item in &items_streaming {
+            let h = match item {
+                ContextItem::Message(seg) => Message::calculate_height(seg, width),
+                _ => unreachable!(),
+            };
+            cache.heights.push(h);
+        }
+        cache.rebuild_prefix_heights();
+        cache.update_metadata(2, width);
+
+        let stale_model_height = cache.heights[1];
+
+        // --- Frame 2: streaming done, full response landed in same batch ---
+        let full_model = ContextSegment {
+            source: Source::Model,
+            content: "this response is long enough to wrap across multiple lines at width 30".into(),
+        };
+        let items_done: Vec<ContextItem> = vec![
+            ContextItem::Message(user_seg.clone()),
+            ContextItem::Message(full_model.clone()),
+        ];
+
+        // is_loading = false now. The fix should exclude the last volatile item.
+        let reusable = cache.reusable_count(2, width, false, &items_done);
+        assert_eq!(reusable, 1, "should force recalculation of the volatile last message");
+        cache.heights.truncate(reusable);
+
+        // Recalculate from reusable onward (index 1)
+        for item in items_done.iter().skip(cache.heights.len()) {
+            let h = match item {
+                ContextItem::Message(seg) => Message::calculate_height(seg, width),
+                _ => unreachable!(),
+            };
+            cache.heights.push(h);
+        }
+        cache.rebuild_prefix_heights();
+        cache.update_metadata(2, width);
+
+        let fresh_model_height = cache.heights[1];
+
+        // The recalculated height must be taller than the stale one
+        assert!(
+            fresh_model_height > stale_model_height,
+            "fresh height ({fresh_model_height}) should exceed stale height ({stale_model_height})"
+        );
+
+        // User message height must be unchanged (was reusable)
+        let expected_user_height = Message::calculate_height(&user_seg, width);
+        assert_eq!(cache.heights[0], expected_user_height);
     }
 }
