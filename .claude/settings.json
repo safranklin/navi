@@ -1,0 +1,26 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "filepath=\"$CLAUDE_FILE_PATH\"; [ -n \"$filepath\" ] && echo \"$filepath\" | grep -q '\\.rs$' && rustfmt \"$filepath\" 2>/dev/null; exit 0"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "filepath=\"$CLAUDE_FILE_PATH\"; [ -n \"$filepath\" ] && echo \"$filepath\" | grep -qE '(^|/)\\.env$' && echo 'BLOCKED: .env contains secrets — use .env.example instead' && exit 2; exit 0"
+          }
+        ]
+      }
+    ]
+  }
+}

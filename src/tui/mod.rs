@@ -299,7 +299,7 @@ fn spawn_request(app: &App, tx: mpsc::Sender<Action>) {
 
         if let Err(e) = provider.stream_completion(request, chunk_tx).await {
             info!("Stream error: {}", e);
-            if tx_stream.send(Action::ResponseChunk(format!("\n[Error: {}]", e))).is_err() {
+            if tx_stream.send(Action::ResponseChunk { text: format!("\n[Error: {}]", e), item_id: None }).is_err() {
                 warn!("Failed to send stream error action: receiver dropped");
             }
         }
@@ -313,17 +313,17 @@ fn spawn_request(app: &App, tx: mpsc::Sender<Action>) {
         while let Some(chunk) = chunk_rx.recv().await {
             forwarded_count += 1;
             match chunk {
-                StreamChunk::Content(c) => {
-                    total_content_len += c.len();
-                    debug!("Forwarding Action::ResponseChunk (len={}, total={})", c.len(), total_content_len);
-                    if tx.send(Action::ResponseChunk(c)).is_err() {
+                StreamChunk::Content { text, item_id } => {
+                    total_content_len += text.len();
+                    debug!("Forwarding Action::ResponseChunk (len={}, total={})", text.len(), total_content_len);
+                    if tx.send(Action::ResponseChunk { text, item_id }).is_err() {
                         warn!("Failed to forward ResponseChunk: receiver dropped");
                         return;
                     }
                 }
-                StreamChunk::Thinking(t) => {
-                    debug!("Forwarding Action::ThinkingChunk (len={})", t.len());
-                    if tx.send(Action::ThinkingChunk(t)).is_err() {
+                StreamChunk::Thinking { text, item_id } => {
+                    debug!("Forwarding Action::ThinkingChunk (len={})", text.len());
+                    if tx.send(Action::ThinkingChunk { text, item_id }).is_err() {
                         warn!("Failed to forward ThinkingChunk: receiver dropped");
                         return;
                     }

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -56,6 +57,10 @@ pub enum ContextItem {
 pub struct Context {
     /// Polymorphic collection: messages, tool calls, and tool results.
     pub items: Vec<ContextItem>,
+    /// Routes streaming item_ids to their index in `items`.
+    /// Transient — only meaningful during an active stream.
+    #[serde(skip)]
+    active_streams: HashMap<String, usize>,
 }
 
 impl Default for Context {
@@ -80,6 +85,7 @@ impl Context {
         };
         Context {
             items: vec![ContextItem::Message(sys_directive)],
+            active_streams: HashMap::new(),
         }
     }
 
@@ -112,14 +118,33 @@ impl Context {
 
     /// Appends content to the last message if it is from the model.
     /// If the last message is not from the model, creates a new one.
-    pub fn append_to_last_model_message(&mut self, content: &str) {
+    ///
+    /// When `item_id` is provided, routes via `active_streams` so interleaved
+    /// thinking/content deltas don't fragment a single message into many.
+    pub fn append_to_last_model_message(&mut self, content: &str, item_id: Option<&str>) {
         let normalized = replace_typography(content);
 
+        // Route via active_streams when we have an item_id
+        if let Some(id) = item_id
+            && let Some(&idx) = self.active_streams.get(id)
+            && let Some(ContextItem::Message(seg)) = self.items.get_mut(idx)
+            && seg.source == Source::Model
+        {
+            seg.content.push_str(&normalized);
+            return;
+        }
+
+        // Fallback: append to last item if it's a Model message
+        let last_idx = self.items.len().wrapping_sub(1);
         if let Some(ContextItem::Message(seg)) = self.items.last_mut()
-            && seg.source == Source::Model {
-                seg.content.push_str(&normalized);
-                return;
+            && seg.source == Source::Model
+        {
+            seg.content.push_str(&normalized);
+            if let Some(id) = item_id {
+                self.active_streams.insert(id.to_string(), last_idx);
             }
+            return;
+        }
 
         // Don't create a new model message for whitespace-only content.
         // The API sometimes sends empty text deltas before reasoning/tool calls.
@@ -131,23 +156,53 @@ impl Context {
             source: Source::Model,
             content: normalized,
         });
+        if let Some(id) = item_id {
+            self.active_streams.insert(id.to_string(), self.items.len() - 1);
+        }
     }
 
     /// Appends content to the last message if it is a thinking message.
     /// If the last message is not thinking, creates a new one.
-    pub fn append_to_last_thinking_message(&mut self, content: &str) {
+    ///
+    /// When `item_id` is provided, routes via `active_streams` so interleaved
+    /// thinking/content deltas don't fragment a single message into many.
+    pub fn append_to_last_thinking_message(&mut self, content: &str, item_id: Option<&str>) {
         let normalized = replace_typography(content);
 
+        // Route via active_streams when we have an item_id
+        if let Some(id) = item_id
+            && let Some(&idx) = self.active_streams.get(id)
+            && let Some(ContextItem::Message(seg)) = self.items.get_mut(idx)
+            && seg.source == Source::Thinking
+        {
+            seg.content.push_str(&normalized);
+            return;
+        }
+
+        // Fallback: append to last item if it's a Thinking message
+        let last_idx = self.items.len().wrapping_sub(1);
         if let Some(ContextItem::Message(seg)) = self.items.last_mut()
-            && seg.source == Source::Thinking {
-                seg.content.push_str(&normalized);
-                return;
+            && seg.source == Source::Thinking
+        {
+            seg.content.push_str(&normalized);
+            if let Some(id) = item_id {
+                self.active_streams.insert(id.to_string(), last_idx);
             }
+            return;
+        }
 
         self.add(ContextSegment {
             source: Source::Thinking,
             content: normalized,
         });
+        if let Some(id) = item_id {
+            self.active_streams.insert(id.to_string(), self.items.len() - 1);
+        }
+    }
+
+    /// Clears the active stream routing map. Called when a response completes.
+    pub fn clear_active_streams(&mut self) {
+        self.active_streams.clear();
     }
 }
 
@@ -224,8 +279,8 @@ pub struct ToolResult {
 /// Represents a chunk of streamed content from the model.
 #[derive(Debug)]
 pub enum StreamChunk {
-    Content(String),
-    Thinking(String),
+    Content { text: String, item_id: Option<String> },
+    Thinking { text: String, item_id: Option<String> },
     ToolCall(ToolCall), // Complete tool call (arguments buffered by provider)
 }
 
@@ -313,13 +368,13 @@ mod tests {
     #[test]
     fn test_context_append_to_last_thinking_message() {
         let mut ctx = Context::new();
-        ctx.append_to_last_thinking_message("thinking");
+        ctx.append_to_last_thinking_message("thinking", None);
         assert_eq!(ctx.items.len(), 2);
         let seg = unwrap_message(&ctx.items[1]);
         assert_eq!(seg.source, Source::Thinking);
         assert_eq!(seg.content, "thinking");
 
-        ctx.append_to_last_thinking_message(" more");
+        ctx.append_to_last_thinking_message(" more", None);
         assert_eq!(ctx.items.len(), 2);
         assert_eq!(unwrap_message(&ctx.items[1]).content, "thinking more");
     }
@@ -331,14 +386,14 @@ mod tests {
         ctx.add_user_message("hello".to_string());
         
         // Append to non-model message (should create new)
-        ctx.append_to_last_model_message("start");
+        ctx.append_to_last_model_message("start", None);
         assert_eq!(ctx.items.len(), 3); // System, User, Model
         let seg = unwrap_message(&ctx.items[2]);
         assert_eq!(seg.content, "start");
         assert_eq!(seg.source, Source::Model);
 
         // Append to model message (should append)
-        ctx.append_to_last_model_message(" continued");
+        ctx.append_to_last_model_message(" continued", None);
         assert_eq!(ctx.items.len(), 3);
         assert_eq!(unwrap_message(&ctx.items[2]).content, "start continued");
     }
@@ -347,29 +402,54 @@ mod tests {
     fn test_append_model_message_skips_whitespace_only_creation() {
         let mut ctx = Context::new();
         // Whitespace-only should NOT create a new model message
-        ctx.append_to_last_model_message("\n\n");
+        ctx.append_to_last_model_message("\n\n", None);
         assert_eq!(ctx.items.len(), 1); // Only system directive
 
         // Real content should create one
-        ctx.append_to_last_model_message("Hello");
+        ctx.append_to_last_model_message("Hello", None);
         assert_eq!(ctx.items.len(), 2);
         assert_eq!(unwrap_message(&ctx.items[1]).content, "Hello");
 
         // Whitespace APPENDED to existing model message is fine
-        ctx.append_to_last_model_message("\n\n");
+        ctx.append_to_last_model_message("\n\n", None);
         assert_eq!(ctx.items.len(), 2); // Still 2, appended to existing
         assert_eq!(unwrap_message(&ctx.items[1]).content, "Hello\n\n");
+    }
+
+    #[test]
+    fn test_interleaved_streaming_with_item_id() {
+        let mut ctx = Context::new();
+        let think_id = "item_think_0";
+        let content_id = "item_content_1";
+
+        // Simulate interleaved SSE deltas (thinking and content arriving alternately)
+        ctx.append_to_last_thinking_message("Let me ", Some(think_id));
+        ctx.append_to_last_model_message("Hello", Some(content_id));
+        ctx.append_to_last_thinking_message("think...", Some(think_id));
+        ctx.append_to_last_model_message(" world", Some(content_id));
+
+        // Should produce exactly 2 messages (Thinking + Model), not 4 fragmented ones
+        // items[0] = system directive, items[1] = Thinking, items[2] = Model
+        assert_eq!(ctx.items.len(), 3);
+
+        let thinking = unwrap_message(&ctx.items[1]);
+        assert_eq!(thinking.source, Source::Thinking);
+        assert_eq!(thinking.content, "Let me think...");
+
+        let model = unwrap_message(&ctx.items[2]);
+        assert_eq!(model.source, Source::Model);
+        assert_eq!(model.content, "Hello world");
     }
 
     #[test]
     fn test_append_normalizes_content() {
         let mut ctx = Context::new();
         // Case 1: Typography in new message
-        ctx.append_to_last_model_message("Hello “World”");
+        ctx.append_to_last_model_message("Hello “World”", None);
         assert_eq!(unwrap_message(ctx.items.last().unwrap()).content, "Hello \"World\"");
 
         // Case 2: Typography in appended chunk
-        ctx.append_to_last_model_message("—WAIT");
+        ctx.append_to_last_model_message("—WAIT", None);
         assert_eq!(unwrap_message(ctx.items.last().unwrap()).content, "Hello \"World\"--WAIT");
     }
 }

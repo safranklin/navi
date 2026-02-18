@@ -91,6 +91,13 @@ struct SseEvent {
     event_type: String,
     #[serde(default)]
     delta: String,
+    #[serde(default)]
+    item_id: String,
+}
+
+/// Converts an empty string to None, non-empty to Some.
+fn non_empty(s: String) -> Option<String> {
+    if s.is_empty() { None } else { Some(s) }
 }
 
 /// SSE event for response.output_item.added (detects function_call output items)
@@ -364,7 +371,7 @@ impl CompletionProvider for OpenRouterProvider {
                                     total_content_len
                                 );
                                 if sender
-                                    .send(StreamChunk::Content(event.delta))
+                                    .send(StreamChunk::Content { text: event.delta, item_id: non_empty(event.item_id) })
                                     .await
                                     .is_err()
                                 {
@@ -380,7 +387,7 @@ impl CompletionProvider for OpenRouterProvider {
                                 chunk_count += 1;
                                 debug!("Sending Thinking chunk (len={})", event.delta.len());
                                 if sender
-                                    .send(StreamChunk::Thinking(event.delta))
+                                    .send(StreamChunk::Thinking { text: event.delta, item_id: non_empty(event.item_id) })
                                     .await
                                     .is_err()
                                 {

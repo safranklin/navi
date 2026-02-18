@@ -24,9 +24,9 @@ pub enum Action {
     // Submit a user message (TUI passes the message content)
     Submit(String),
     // Receive a chunk of content from the API (streaming)
-    ResponseChunk(String),
+    ResponseChunk { text: String, item_id: Option<String> },
     // Receive a chunk of thinking/reasoning from the API
-    ThinkingChunk(String),
+    ThinkingChunk { text: String, item_id: Option<String> },
     // Signal that the streaming response is complete
     ResponseDone,
     // Model wants to call a tool
@@ -59,22 +59,23 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
             app_state.status_message = String::from("Loading...");
             Effect::SpawnRequest
         }
-        Action::ResponseChunk(chunk) => {
-            app_state.context.append_to_last_model_message(&chunk);
+        Action::ResponseChunk { text, item_id } => {
+            app_state.context.append_to_last_model_message(&text, item_id.as_deref());
             // Log total message length after append
             if let Some(crate::inference::ContextItem::Message(last)) = app_state.context.items.last() {
-                debug!("ResponseChunk applied: chunk_len={}, total_msg_len={}", chunk.len(), last.content.len());
+                debug!("ResponseChunk applied: chunk_len={}, total_msg_len={}", text.len(), last.content.len());
             }
             app_state.status_message = String::from("Receiving...");
             Effect::Render
         }
-        Action::ThinkingChunk(chunk) => {
-            app_state.context.append_to_last_thinking_message(&chunk);
-            debug!("ThinkingChunk applied: chunk_len={}", chunk.len());
+        Action::ThinkingChunk { text, item_id } => {
+            app_state.context.append_to_last_thinking_message(&text, item_id.as_deref());
+            debug!("ThinkingChunk applied: chunk_len={}", text.len());
             app_state.status_message = String::from("Thinking...");
             Effect::Render
         }
         Action::ResponseDone => {
+            app_state.context.clear_active_streams();
             if let Some(crate::inference::ContextItem::Message(last)) = app_state.context.items.last() {
                 debug!("ResponseDone: final message length={}", last.content.len());
             }
@@ -173,7 +174,7 @@ mod tests {
         let mut app = test_app();
         app.is_loading = true;
 
-        let effect = update(&mut app, Action::ResponseChunk("Response ".to_string()));
+        let effect = update(&mut app, Action::ResponseChunk { text: "Response ".to_string(), item_id: None });
 
         assert_eq!(app.context.items.len(), 2); // System + Model (new)
         assert!(matches!(&app.context.items[1], ContextItem::Message(seg) if seg.content == "Response " && seg.source == Source::Model));

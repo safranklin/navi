@@ -29,8 +29,8 @@ async fn collect_chunks(mut receiver: mpsc::Receiver<StreamChunk>) -> (Vec<Strin
 
     while let Some(chunk) = receiver.recv().await {
         match chunk {
-            StreamChunk::Content(s) => content_chunks.push(s),
-            StreamChunk::Thinking(s) => thinking_chunks.push(s),
+            StreamChunk::Content { text, .. } => content_chunks.push(text),
+            StreamChunk::Thinking { text, .. } => thinking_chunks.push(text),
             StreamChunk::ToolCall(_) => {} // Collected separately when testing tool calls
         }
     }
