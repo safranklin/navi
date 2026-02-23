@@ -171,6 +171,8 @@ pub struct InputBox {
     pub buffer: String,
     /// Current effort level (Prop)
     pub effort: Effort,
+    /// Whether the input is visually dimmed (Prop — true in Cursor mode)
+    pub dimmed: bool,
     /// Cursor and scroll tracking
     cursor: CursorState,
     /// Emacs-style kill buffer for Ctrl+U/K/W → Ctrl+Y
@@ -188,6 +190,7 @@ impl InputBox {
         Self {
             buffer: String::new(),
             effort,
+            dimmed: false,
             cursor: CursorState::new(),
             kill_buffer: KillBuffer::new(),
             history: InputHistory::new(),
@@ -258,25 +261,35 @@ impl InputBox {
 
 impl Component for InputBox {
     fn render(&mut self, frame: &mut Frame, area: Rect) {
+        use ratatui::style::{Modifier, Style};
+
         self.cursor.last_content_width = area.width;
         self.cursor.update_scroll_offset(&self.buffer, area.width);
 
         let title = format!("Input (Reasoning: {})", self.effort.label());
         let visible_text = self.get_visible_text(area.width);
 
+        let mut style = Style::default().fg(ratatui::style::Color::Green);
+        if self.dimmed {
+            style = style.add_modifier(Modifier::DIM);
+        }
+
         let block = Block::bordered()
             .border_type(ratatui::widgets::BorderType::Rounded)
-            .title(title);
+            .border_style(style)
+            .title(title)
+            .title_style(style);
 
-        let input = Paragraph::new(visible_text)
-            .block(block)
-            .style(ratatui::style::Style::default().fg(ratatui::style::Color::Green));
+        let input = Paragraph::new(visible_text).block(block).style(style);
 
         frame.render_widget(input, area);
         self.render_scrollbar(frame, area);
 
-        let (cursor_x, cursor_y) = self.cursor.screen_pos(&self.buffer, area);
-        frame.set_cursor_position((cursor_x, cursor_y));
+        // Only show cursor when the input is focused (not dimmed)
+        if !self.dimmed {
+            let (cursor_x, cursor_y) = self.cursor.screen_pos(&self.buffer, area);
+            frame.set_cursor_position((cursor_x, cursor_y));
+        }
     }
 }
 

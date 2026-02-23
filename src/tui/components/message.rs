@@ -23,8 +23,8 @@ const PULSE_NORMAL_THRESHOLD: f32 = 0.2;
 /// # Design
 ///
 /// `Message` is a **transient component**: it's created fresh each frame with the data
-/// it needs to render. It holds no mutable state—the `is_hovered` flag is passed in
-/// from the parent `MessageList` which tracks hover state persistently.
+/// it needs to render. It holds no mutable state—the `is_selected` flag is passed in
+/// from the parent `MessageList` which tracks selection state persistently.
 ///
 /// # Styling
 ///
@@ -34,7 +34,7 @@ const PULSE_NORMAL_THRESHOLD: f32 = 0.2;
 /// - **Directive** (yellow): System instructions
 /// - **Thinking** (dark gray, italic): Model reasoning traces
 ///
-/// Hovered messages get a `DarkGray` background overlay for visual feedback.
+/// Selected messages are rendered at normal brightness; unselected messages are dimmed.
 ///
 /// # Height Calculation
 ///
@@ -46,9 +46,7 @@ const PULSE_NORMAL_THRESHOLD: f32 = 0.2;
 pub struct Message<'a> {
     /// The message content and metadata to render
     pub segment: &'a ContextSegment,
-    /// Whether this message is currently under the cursor
-    pub is_hovered: bool,
-    /// Whether this message is selected in Cursor mode
+    /// Whether this message is currently selected (hover or keyboard navigation)
     pub is_selected: bool,
     /// Current pulse intensity (0.0 to 1.0) for active generation animation
     pub pulse_intensity: f32,
@@ -60,13 +58,11 @@ impl<'a> Message<'a> {
     /// This is typically called within `MessageList::render()` for each visible segment.
     pub fn new(
         segment: &'a ContextSegment,
-        is_hovered: bool,
         is_selected: bool,
         pulse_intensity: f32,
     ) -> Self {
         Self {
             segment,
-            is_hovered,
             is_selected,
             pulse_intensity,
         }
@@ -128,10 +124,8 @@ impl<'a> Widget for Message<'a> {
                 .add_modifier(Modifier::ITALIC),
         };
 
-        // Selection overrides hover: cyan border for selected, bright for hover, dim otherwise
+        // Selected = source color at normal brightness (lightened from default dim)
         let mut border_style = if self.is_selected {
-            Style::default().fg(Color::Cyan)
-        } else if self.is_hovered {
             style
         } else {
             style.add_modifier(Modifier::DIM)

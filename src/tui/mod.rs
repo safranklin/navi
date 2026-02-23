@@ -140,8 +140,9 @@ pub fn run(provider_choice: Provider) -> std::io::Result<()> {
     let mut needs_redraw = true; // Force first frame
 
     loop {
-        // Sync InputBox effort prop with App state
+        // Sync InputBox props with App/TUI state
         tui.input_box.effort = app.effort;
+        tui.input_box.dimmed = matches!(tui.input_mode, InputMode::Cursor);
 
         // Determine if animations are running (landing page or loading spinner)
         let has_visible_messages = app.context.items.iter().any(|item|
@@ -199,7 +200,7 @@ pub fn run(provider_choice: Provider) -> std::io::Result<()> {
                 let scroll_offset = tui.message_list.scroll_state.offset().y;
                 let input_height = tui.input_box.calculate_height(frame_area.width);
 
-                tui.message_list.hovered_index = ui::hit_test_message(
+                tui.message_list.selected_index = ui::hit_test_message(
                     row,
                     frame_area,
                     scroll_offset,

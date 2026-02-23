@@ -39,9 +39,7 @@ pub struct MessageListState {
     pub stick_to_bottom: bool,
     /// Furthest scroll position reached (for "new content" indicator)
     pub max_scroll_reached: u16,
-    /// Currently hovered message index (for visual feedback)
-    pub hovered_index: Option<usize>,
-    /// Currently selected message index (Cursor mode navigation)
+    /// Currently selected message index (hover or keyboard navigation)
     pub selected_index: Option<usize>,
     /// Last known viewport height (for scroll clamping between frames)
     pub viewport_height: u16,
@@ -60,7 +58,6 @@ impl MessageListState {
             layout: LayoutCache::new(),
             stick_to_bottom: true, // Start attached to bottom
             max_scroll_reached: 0,
-            hovered_index: None,
             selected_index: None,
             viewport_height: 0,
         }
@@ -219,8 +216,8 @@ impl<'a> Component for MessageList<'a> {
             let height = self.state.layout.heights[i];
 
             let is_last = i == num_items.saturating_sub(1);
-            let is_hovered = self.state.hovered_index == Some(i) && !(is_last && self.is_loading);
-            let is_selected = self.state.selected_index == Some(i);
+            let is_selected =
+                self.state.selected_index == Some(i) && !(is_last && self.is_loading);
 
             let segment_rect = Rect::new(0, y_offset, content_width, height);
 
@@ -235,7 +232,7 @@ impl<'a> Component for MessageList<'a> {
                     } else {
                         0.0
                     };
-                    let message = Message::new(seg, is_hovered, is_selected, pulse_intensity);
+                    let message = Message::new(seg, is_selected, pulse_intensity);
                     scroll_view.render_widget(message, segment_rect);
                 }
                 crate::inference::ContextItem::ToolCall(tc) => {
@@ -256,7 +253,7 @@ impl<'a> Component for MessageList<'a> {
         if let Some((ghost_seg, ghost_height)) = &ghost {
             let viewport_bottom = scroll_offset + area.height;
             if y_offset < viewport_bottom {
-                let message = Message::new(ghost_seg, false, false, self.pulse_value);
+                let message = Message::new(ghost_seg, false, self.pulse_value);
                 let segment_rect = Rect::new(0, y_offset, content_width, *ghost_height);
                 scroll_view.render_widget(message, segment_rect);
             }
