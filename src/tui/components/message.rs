@@ -1,7 +1,7 @@
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Padding, Paragraph, Widget, Wrap};
-use ratatui::Frame;
 
 use crate::inference::{ContextSegment, Source};
 use crate::tui::component::Component;
@@ -48,6 +48,8 @@ pub struct Message<'a> {
     pub segment: &'a ContextSegment,
     /// Whether this message is currently under the cursor
     pub is_hovered: bool,
+    /// Whether this message is selected in Cursor mode
+    pub is_selected: bool,
     /// Current pulse intensity (0.0 to 1.0) for active generation animation
     pub pulse_intensity: f32,
 }
@@ -56,10 +58,16 @@ impl<'a> Message<'a> {
     /// Creates a new Message component for rendering.
     ///
     /// This is typically called within `MessageList::render()` for each visible segment.
-    pub fn new(segment: &'a ContextSegment, is_hovered: bool, pulse_intensity: f32) -> Self {
+    pub fn new(
+        segment: &'a ContextSegment,
+        is_hovered: bool,
+        is_selected: bool,
+        pulse_intensity: f32,
+    ) -> Self {
         Self {
             segment,
             is_hovered,
+            is_selected,
             pulse_intensity,
         }
     }
@@ -83,7 +91,9 @@ impl<'a> Message<'a> {
         }
 
         let content = segment.content.trim();
-        if content.is_empty() { return VERTICAL_OVERHEAD; }
+        if content.is_empty() {
+            return VERTICAL_OVERHEAD;
+        }
 
         let options = textwrap::Options::new(content_width as usize)
             .break_words(true)
@@ -110,12 +120,18 @@ impl<'a> Widget for Message<'a> {
             Source::Directive => Style::default().fg(Color::Yellow),
             Source::User => Style::default().fg(Color::Green),
             Source::Model => Style::default().fg(Color::Blue),
-            Source::Thinking => Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
-            Source::Status => Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+            Source::Thinking => Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::ITALIC),
+            Source::Status => Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::ITALIC),
         };
 
-        // Hover effect: text always readable, border brightens on hover
-        let mut border_style = if self.is_hovered {
+        // Selection overrides hover: cyan border for selected, bright for hover, dim otherwise
+        let mut border_style = if self.is_selected {
+            Style::default().fg(Color::Cyan)
+        } else if self.is_hovered {
             style
         } else {
             style.add_modifier(Modifier::DIM)
@@ -124,7 +140,9 @@ impl<'a> Widget for Message<'a> {
         // Pulse animation if generating
         // Three-phase breathing: DIM → normal → BOLD using the source's own color
         if self.pulse_intensity > PULSE_BOLD_THRESHOLD {
-            border_style = border_style.remove_modifier(Modifier::DIM).add_modifier(Modifier::BOLD);
+            border_style = border_style
+                .remove_modifier(Modifier::DIM)
+                .add_modifier(Modifier::BOLD);
         } else if self.pulse_intensity > PULSE_NORMAL_THRESHOLD {
             border_style = border_style.remove_modifier(Modifier::DIM);
         }
@@ -211,7 +229,10 @@ mod tests {
     fn calculate_height_single_line_fits() {
         let segment = make_segment(Source::User, "Hello");
         // "Hello" (5 chars) fits in width 80 - HORIZONTAL_OVERHEAD = 76
-        assert_eq!(Message::calculate_height(&segment, 80), 1 + VERTICAL_OVERHEAD);
+        assert_eq!(
+            Message::calculate_height(&segment, 80),
+            1 + VERTICAL_OVERHEAD
+        );
     }
 
     #[test]
@@ -219,7 +240,10 @@ mod tests {
         let segment = make_segment(Source::User, "Hello world");
         // "Hello world" = 11 chars, width 9 → content_width = 5
         // Wraps to: "Hello" | "world" = 2 lines
-        assert_eq!(Message::calculate_height(&segment, 9), 2 + VERTICAL_OVERHEAD);
+        assert_eq!(
+            Message::calculate_height(&segment, 9),
+            2 + VERTICAL_OVERHEAD
+        );
     }
 
     #[test]
@@ -227,7 +251,10 @@ mod tests {
         let segment = make_segment(Source::User, "abcdefghij");
         // "abcdefghij" = 10 chars, width 8 → content_width = 4
         // Breaks to: "abcd" | "efgh" | "ij" = 3 lines
-        assert_eq!(Message::calculate_height(&segment, 8), 3 + VERTICAL_OVERHEAD);
+        assert_eq!(
+            Message::calculate_height(&segment, 8),
+            3 + VERTICAL_OVERHEAD
+        );
     }
 
     // ==========================================================================
@@ -269,7 +296,9 @@ mod tests {
             Source::Directive => Style::default().fg(Color::Yellow),
             Source::User => Style::default().fg(Color::Green),
             Source::Model => Style::default().fg(Color::Blue),
-            Source::Thinking | Source::Status => Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+            Source::Thinking | Source::Status => Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::ITALIC),
         }
     }
 }

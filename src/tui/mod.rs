@@ -19,37 +19,50 @@
 //! ratatui's `set_cursor_position` resets the terminal's blink timer on every
 //! `draw()` call, making blinking cursors appear erratic during continuous redraws.
 
-mod event;
-mod ui;
 mod component;
 mod components;
+mod event;
+mod ui;
 
 use log::{debug, info, warn};
 use std::env;
 use std::io::stdout;
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, mpsc};
 
-use crossterm::execute;
+use crossterm::cursor::{Hide, SetCursorStyle, Show};
 use crossterm::event::{
-    EnableMouseCapture, DisableMouseCapture, EnableBracketedPaste, DisableBracketedPaste,
-    KeyboardEnhancementFlags, PushKeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
-use crossterm::cursor::{Show, Hide, SetCursorStyle};
+use crossterm::execute;
 
-use crate::core::action::{Action, update, Effect};
-use crate::core::state::App;
-use crate::inference::{CompletionRequest, CompletionProvider, LmStudioProvider, OpenRouterProvider, StreamChunk};
-use crate::inference::Effort;
 use crate::Provider;
-use crate::tui::event::{poll_event_timeout, poll_event_immediate, TuiEvent};
+use crate::core::action::{Action, Effect, update};
+use crate::core::state::App;
+use crate::inference::Effort;
+use crate::inference::{
+    CompletionProvider, CompletionRequest, LmStudioProvider, OpenRouterProvider, StreamChunk,
+};
 use crate::tui::component::EventHandler;
 use crate::tui::components::{InputBox, InputEvent, MessageListState};
+use crate::tui::event::{TuiEvent, poll_event_immediate, poll_event_timeout};
+
+/// Modal input mode: determines how keyboard events are interpreted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputMode {
+    /// Navigate messages with arrow keys. Typing auto-switches to Input.
+    Cursor,
+    /// Text editing in the input box. Esc switches to Cursor.
+    Input,
+}
 
 /// TUI-specific presentation state (not part of core business logic)
 pub struct TuiState {
     // Persistent component states
     pub message_list: MessageListState,
     pub input_box: InputBox,
+    // Modal input mode
+    pub input_mode: InputMode,
     // Animation state
     pub pulse_value: f32,
 }
@@ -59,6 +72,7 @@ impl TuiState {
         Self {
             message_list: MessageListState::new(),
             input_box: InputBox::new(initial_effort),
+            input_mode: InputMode::Input, // User expects to type immediately
             pulse_value: 0.0,
         }
     }
@@ -75,14 +89,16 @@ impl TerminalModeGuard {
             stdout(),
             EnableMouseCapture,
             EnableBracketedPaste,
-            Show, // Show cursor for input editing
+            Show,                        // Show cursor for input editing
             SetCursorStyle::SteadyBlock, // Non-blinking: avoids blink timer reset from continuous redraws
             PushKeyboardEnhancementFlags(
                 KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
                     | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
             )
         )?;
-        info!("Terminal modes enabled (mouse, bracketed paste, steady block cursor, keyboard enhancement)");
+        info!(
+            "Terminal modes enabled (mouse, bracketed paste, steady block cursor, keyboard enhancement)"
+        );
         Ok(Self)
     }
 }
@@ -112,13 +128,13 @@ pub fn run(provider_choice: Provider) -> std::io::Result<()> {
     let mut app = App::new(provider, model_name);
     // Initialize TuiState with current effort from App
     let mut tui = TuiState::new(app.effort);
-    
+
     let mut terminal = ratatui::init();
     let _terminal_mode_guard = TerminalModeGuard::new();
 
     // Channel for actions from background tasks
     let (tx, rx) = mpsc::channel();
-    
+
     // Animation timer
     let start_time = std::time::Instant::now();
     let mut needs_redraw = true; // Force first frame
@@ -159,13 +175,17 @@ pub fn run(provider_choice: Provider) -> std::io::Result<()> {
         if first_event.is_some() {
             needs_redraw = true;
         }
-        for event in first_event.into_iter().chain(std::iter::from_fn(poll_event_immediate)) {
+        for event in first_event
+            .into_iter()
+            .chain(std::iter::from_fn(poll_event_immediate))
+        {
             // Resize just needs a redraw (already flagged above)
             if matches!(event, TuiEvent::Resize) {
                 continue;
             }
-            // Priority 1: Check for global Quit
-            if matches!(event, TuiEvent::Quit) {
+
+            // ForceQuit (Ctrl+C) always quits regardless of mode
+            if matches!(event, TuiEvent::ForceQuit) {
                 let effect = update(&mut app, Action::Quit);
                 if effect == Effect::Quit {
                     should_quit = true;
@@ -173,40 +193,8 @@ pub fn run(provider_choice: Provider) -> std::io::Result<()> {
                 continue;
             }
 
-            // Priority 2: Delegate to InputBox (handles typing, pasting, submitting, cycle effort)
-            // Note: InputBox returns Option<InputEvent>
-            if let Some(input_event) = tui.input_box.handle_event(&event) {
-                match input_event {
-                    InputEvent::Submit(text) => {
-                        // Don't allow submitting while loading
-                        if !app.is_loading {
-                            let effect = update(&mut app, Action::Submit(text));
-                            if effect == Effect::SpawnRequest {
-                                spawn_request(&app, tx.clone());
-                            }
-                        }
-                    }
-                    InputEvent::CycleEffort => {
-                        // InputBox detected Ctrl+R, we update App state
-                        app.effort = app.effort.next();
-                        app.status_message = format!("Reasoning: {}", app.effort.label());
-                    }
-                    InputEvent::ContentChanged => {
-                        // Redraw handled by main loop
-                    }
-                }
-                continue;
-            }
-
-            // Priority 3: Delegate to MessageList (scrolling)
-            if tui.message_list.handle_event(&event).is_some() {
-                 // MessageList handled it
-                 continue;
-            }
-
-            // Priority 4: Mouse hover (global for now, or could be in MessageListState)
+            // Mouse hover — always active regardless of mode
             if let TuiEvent::MouseMove(_col, row) = event {
-                // We need hit testing. Use layout from message_list state.
                 let frame_area = terminal.get_frame().area();
                 let scroll_offset = tui.message_list.scroll_state.offset().y;
                 let input_height = tui.input_box.calculate_height(frame_area.width);
@@ -218,9 +206,102 @@ pub fn run(provider_choice: Provider) -> std::io::Result<()> {
                     &tui.message_list.layout.prefix_heights,
                     input_height,
                 );
+                continue;
+            }
+
+            // Scroll events — always go to MessageList regardless of mode
+            if matches!(
+                event,
+                TuiEvent::ScrollUp
+                    | TuiEvent::ScrollDown
+                    | TuiEvent::ScrollPageUp
+                    | TuiEvent::ScrollPageDown
+            ) {
+                tui.message_list.handle_event(&event);
+                continue;
+            }
+
+            // Modal event dispatch
+            match tui.input_mode {
+                InputMode::Input => {
+                    // Esc → switch to Cursor mode
+                    if matches!(event, TuiEvent::Escape) {
+                        tui.input_mode = InputMode::Cursor;
+                        // Select the last message when entering Cursor mode
+                        let msg_count = app.context.items.len();
+                        tui.message_list.selected_index = if msg_count > 0 {
+                            Some(msg_count - 1)
+                        } else {
+                            None
+                        };
+                        continue;
+                    }
+
+                    // InputBox handles everything else
+                    if let Some(input_event) = tui.input_box.handle_event(&event) {
+                        match input_event {
+                            InputEvent::Submit(text) => {
+                                if !app.is_loading {
+                                    let effect = update(&mut app, Action::Submit(text));
+                                    if effect == Effect::SpawnRequest {
+                                        spawn_request(&app, tx.clone());
+                                    }
+                                }
+                            }
+                            InputEvent::CycleEffort => {
+                                app.effort = app.effort.next();
+                                app.status_message = format!("Reasoning: {}", app.effort.label());
+                            }
+                            InputEvent::ContentChanged => {}
+                        }
+                    }
+                }
+                InputMode::Cursor => {
+                    match event {
+                        // Esc in Cursor mode is a no-op
+                        TuiEvent::Escape => {}
+                        // Typing auto-switches to Input mode and forwards the event
+                        TuiEvent::InputChar(_) | TuiEvent::Paste(_) => {
+                            tui.input_mode = InputMode::Input;
+                            tui.message_list.selected_index = None;
+                            tui.input_box.handle_event(&event);
+                        }
+                        // Enter switches to Input mode
+                        TuiEvent::Submit => {
+                            tui.input_mode = InputMode::Input;
+                            tui.message_list.selected_index = None;
+                        }
+                        // Up/Down navigate messages
+                        TuiEvent::CursorUp => {
+                            let msg_count = app.context.items.len();
+                            if msg_count > 0 {
+                                let idx = tui
+                                    .message_list
+                                    .selected_index
+                                    .map(|i| i.saturating_sub(1))
+                                    .unwrap_or(msg_count - 1);
+                                tui.message_list.selected_index = Some(idx);
+                            }
+                        }
+                        TuiEvent::CursorDown => {
+                            let msg_count = app.context.items.len();
+                            if let Some(idx) = tui.message_list.selected_index
+                                && idx + 1 < msg_count
+                            {
+                                tui.message_list.selected_index = Some(idx + 1);
+                            }
+                        }
+                        // CycleEffort works in both modes
+                        TuiEvent::CycleEffort => {
+                            app.effort = app.effort.next();
+                            app.status_message = format!("Reasoning: {}", app.effort.label());
+                        }
+                        _ => {}
+                    }
+                }
             }
         }
-        
+
         if should_quit {
             break;
         }
@@ -251,23 +332,37 @@ fn spawn_tool_execution(
     registry: Arc<crate::core::tools::ToolRegistry>,
     tx: mpsc::Sender<Action>,
 ) {
-    info!("Spawning tool execution: {} (call_id={})", tool_call.name, tool_call.call_id);
+    info!(
+        "Spawning tool execution: {} (call_id={})",
+        tool_call.name, tool_call.call_id
+    );
     tokio::spawn(async move {
         let output = match tokio::time::timeout(
             std::time::Duration::from_secs(30),
             registry.execute(&tool_call),
-        ).await {
+        )
+        .await
+        {
             Ok(result) => result,
             Err(_) => {
-                warn!("Tool '{}' timed out after 30s (call_id={})", tool_call.name, tool_call.call_id);
+                warn!(
+                    "Tool '{}' timed out after 30s (call_id={})",
+                    tool_call.name, tool_call.call_id
+                );
                 serde_json::json!({"error": "Tool execution timed out after 30s"}).to_string()
             }
         };
-        if tx.send(Action::ToolResultReady {
-            call_id: tool_call.call_id.clone(),
-            output,
-        }).is_err() {
-            warn!("Failed to send tool result for call_id={}: receiver dropped", tool_call.call_id);
+        if tx
+            .send(Action::ToolResultReady {
+                call_id: tool_call.call_id.clone(),
+                output,
+            })
+            .is_err()
+        {
+            warn!(
+                "Failed to send tool result for call_id={}: receiver dropped",
+                tool_call.call_id
+            );
         }
     });
 }
@@ -299,7 +394,13 @@ fn spawn_request(app: &App, tx: mpsc::Sender<Action>) {
 
         if let Err(e) = provider.stream_completion(request, chunk_tx).await {
             info!("Stream error: {}", e);
-            if tx_stream.send(Action::ResponseChunk { text: format!("\n[Error: {}]", e), item_id: None }).is_err() {
+            if tx_stream
+                .send(Action::ResponseChunk {
+                    text: format!("\n[Error: {}]", e),
+                    item_id: None,
+                })
+                .is_err()
+            {
                 warn!("Failed to send stream error action: receiver dropped");
             }
         }
@@ -315,7 +416,11 @@ fn spawn_request(app: &App, tx: mpsc::Sender<Action>) {
             match chunk {
                 StreamChunk::Content { text, item_id } => {
                     total_content_len += text.len();
-                    debug!("Forwarding Action::ResponseChunk (len={}, total={})", text.len(), total_content_len);
+                    debug!(
+                        "Forwarding Action::ResponseChunk (len={}, total={})",
+                        text.len(),
+                        total_content_len
+                    );
                     if tx.send(Action::ResponseChunk { text, item_id }).is_err() {
                         warn!("Failed to forward ResponseChunk: receiver dropped");
                         return;
@@ -338,7 +443,10 @@ fn spawn_request(app: &App, tx: mpsc::Sender<Action>) {
             }
         }
 
-        info!("Forwarding complete: {} actions, {} content bytes", forwarded_count, total_content_len);
+        info!(
+            "Forwarding complete: {} actions, {} content bytes",
+            forwarded_count, total_content_len
+        );
         if tx.send(Action::ResponseDone).is_err() {
             warn!("Failed to send ResponseDone: receiver dropped");
         }

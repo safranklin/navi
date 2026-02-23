@@ -60,6 +60,68 @@ pub(super) fn next_char_boundary(text: &str, pos: usize) -> usize {
         .unwrap_or(text.len())
 }
 
+/// Whether a character is a "word" character (alphanumeric or underscore).
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+/// Find the byte offset of the previous word boundary before `pos` in `text`.
+///
+/// Moves backwards: first skips any non-word characters (spaces, punctuation),
+/// then skips word characters until reaching a non-word character or the start.
+/// This matches Emacs/readline `backward-word` behavior.
+pub(super) fn prev_word_boundary(text: &str, pos: usize) -> usize {
+    let before = &text[..pos];
+    let mut chars = before.char_indices().rev().peekable();
+
+    // Phase 1: skip non-word characters
+    while chars.peek().is_some_and(|&(_, c)| !is_word_char(c)) {
+        chars.next();
+    }
+
+    // Phase 2: skip word characters
+    let mut boundary = 0;
+    while let Some(&(i, c)) = chars.peek() {
+        if !is_word_char(c) {
+            boundary = i + c.len_utf8();
+            break;
+        }
+        boundary = i;
+        chars.next();
+    }
+
+    boundary
+}
+
+/// Find the byte offset of the next word boundary after `pos` in `text`.
+///
+/// Moves forward: first skips any non-word characters, then skips word
+/// characters until reaching a non-word character or the end.
+/// This matches Emacs/readline `forward-word` behavior.
+pub(super) fn next_word_boundary(text: &str, pos: usize) -> usize {
+    let after = &text[pos..];
+    let mut chars = after.char_indices().peekable();
+
+    // Phase 1: skip non-word characters
+    while chars.peek().is_some_and(|&(_, c)| !is_word_char(c)) {
+        chars.next();
+    }
+
+    // Phase 2: skip word characters
+    while let Some(&(_, c)) = chars.peek() {
+        if !is_word_char(c) {
+            break;
+        }
+        chars.next();
+    }
+
+    // Return byte offset relative to the full string
+    match chars.peek() {
+        Some(&(i, _)) => pos + i,
+        None => text.len(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,5 +231,105 @@ mod tests {
         assert_eq!(next_char_boundary(s, 0), 1);
         // From byte 1 (emoji start), next is byte 5 ('b')
         assert_eq!(next_char_boundary(s, 1), 5);
+    }
+
+    // -- prev_word_boundary -------------------------------------------------
+
+    #[test]
+    fn prev_word_simple() {
+        // "hello world" — from end (11), skip back over "world" → 6
+        assert_eq!(prev_word_boundary("hello world", 11), 6);
+    }
+
+    #[test]
+    fn prev_word_from_middle_of_word() {
+        // "hello world" — from byte 8 (mid-"world"), skip back over "wor" → 6
+        assert_eq!(prev_word_boundary("hello world", 8), 6);
+    }
+
+    #[test]
+    fn prev_word_multiple_spaces() {
+        // "hello   world" — from byte 12 (end of "world"), skip spaces then "hello" → 0
+        assert_eq!(prev_word_boundary("hello   world", 8), 0);
+    }
+
+    #[test]
+    fn prev_word_at_start() {
+        assert_eq!(prev_word_boundary("hello", 0), 0);
+    }
+
+    #[test]
+    fn prev_word_punctuation() {
+        // "foo.bar" — from end (7), skip "bar", stop at '.' → 4
+        assert_eq!(prev_word_boundary("foo.bar", 7), 4);
+    }
+
+    #[test]
+    fn prev_word_underscore_is_word_char() {
+        // "hello_world test" — from byte 16, skip "test" → 12
+        // from byte 12, skip space then "hello_world" as one word → 0
+        assert_eq!(prev_word_boundary("hello_world test", 16), 12);
+        assert_eq!(prev_word_boundary("hello_world test", 12), 0);
+    }
+
+    #[test]
+    fn prev_word_unicode() {
+        // "café latte" — from end, skip "latte" → 5 (byte offset after space)
+        assert_eq!(prev_word_boundary("café latte", "café latte".len()), 6);
+    }
+
+    #[test]
+    fn prev_word_at_word_boundary() {
+        // "hello world" — from byte 6 ('w'), no non-word to skip, skip back over "hello" → 0
+        assert_eq!(prev_word_boundary("hello world", 6), 0);
+    }
+
+    // -- next_word_boundary -------------------------------------------------
+
+    #[test]
+    fn next_word_simple() {
+        // "hello world" — from 0, skip "hello" → 5
+        assert_eq!(next_word_boundary("hello world", 0), 5);
+    }
+
+    #[test]
+    fn next_word_from_space() {
+        // "hello world" — from 5 (space), skip space then "world" → 11
+        assert_eq!(next_word_boundary("hello world", 5), 11);
+    }
+
+    #[test]
+    fn next_word_multiple_spaces() {
+        // "hello   world" — from 5 (first space), skip spaces then "world" → 13
+        assert_eq!(next_word_boundary("hello   world", 5), 13);
+    }
+
+    #[test]
+    fn next_word_at_end() {
+        assert_eq!(next_word_boundary("hello", 5), 5);
+    }
+
+    #[test]
+    fn next_word_punctuation() {
+        // "foo.bar" — from 0, skip "foo" → 3
+        assert_eq!(next_word_boundary("foo.bar", 0), 3);
+    }
+
+    #[test]
+    fn next_word_underscore_is_word_char() {
+        // "hello_world test" — from 0, treat "hello_world" as one word → 11
+        assert_eq!(next_word_boundary("hello_world test", 0), 11);
+    }
+
+    #[test]
+    fn next_word_unicode() {
+        // "café latte" — from 0, skip "café" → 5 (byte offset of 'é' end)
+        assert_eq!(next_word_boundary("café latte", 0), 5);
+    }
+
+    #[test]
+    fn next_word_from_middle() {
+        // "hello world" — from 2 (mid-"hello"), skip remaining "llo" → 5
+        assert_eq!(next_word_boundary("hello world", 2), 5);
     }
 }
