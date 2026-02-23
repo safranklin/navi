@@ -1,11 +1,11 @@
 use navi::inference::{
-    CompletionProvider, CompletionRequest, Context, ContextSegment, Effort, ProviderError,
-    Source, StreamChunk, LmStudioProvider, OpenRouterProvider,
+    CompletionProvider, CompletionRequest, Context, ContextSegment, Effort, LmStudioProvider,
+    OpenRouterProvider, ProviderError, Source, StreamChunk,
 };
 use tokio::sync::mpsc;
 use wiremock::{
-    matchers::{method, path},
     Mock, MockServer, ResponseTemplate,
+    matchers::{method, path},
 };
 
 // ============================================================================
@@ -67,10 +67,7 @@ data: {\"type\":\"response.completed\"}
         .mount(&mock_server)
         .await;
 
-    let provider = OpenRouterProvider::new(
-        "test-key".to_string(),
-        Some(mock_server.uri()),
-    );
+    let provider = OpenRouterProvider::new("test-key".to_string(), Some(mock_server.uri()));
 
     let context = create_test_context();
     let request = CompletionRequest {
@@ -115,10 +112,7 @@ data: {\"type\":\"response.completed\"}
         .mount(&mock_server)
         .await;
 
-    let provider = OpenRouterProvider::new(
-        "test-key".to_string(),
-        Some(mock_server.uri()),
-    );
+    let provider = OpenRouterProvider::new("test-key".to_string(), Some(mock_server.uri()));
 
     let context = create_test_context();
     let request = CompletionRequest {
@@ -148,10 +142,7 @@ async fn test_openrouter_api_error_response() {
         .mount(&mock_server)
         .await;
 
-    let provider = OpenRouterProvider::new(
-        "invalid-key".to_string(),
-        Some(mock_server.uri()),
-    );
+    let provider = OpenRouterProvider::new("invalid-key".to_string(), Some(mock_server.uri()));
 
     let context = create_test_context();
     let request = CompletionRequest {
@@ -164,7 +155,10 @@ async fn test_openrouter_api_error_response() {
     let (tx, _rx) = mpsc::channel(100);
     let result = provider.stream_completion(request, tx).await;
 
-    assert!(matches!(result, Err(ProviderError::Api { status: 401, .. })));
+    assert!(matches!(
+        result,
+        Err(ProviderError::Api { status: 401, .. })
+    ));
 }
 
 #[tokio::test]
@@ -185,10 +179,7 @@ data: {\"type\":\"response.output_text.delta\",\"delta\":\" world\"}
         .mount(&mock_server)
         .await;
 
-    let provider = OpenRouterProvider::new(
-        "test-key".to_string(),
-        Some(mock_server.uri()),
-    );
+    let provider = OpenRouterProvider::new("test-key".to_string(), Some(mock_server.uri()));
 
     let context = create_test_context();
     let request = CompletionRequest {
@@ -368,7 +359,13 @@ async fn test_effort_levels_affect_request() {
     let context = create_test_context();
 
     // Test all effort levels
-    for effort in [Effort::None, Effort::Auto, Effort::Low, Effort::Medium, Effort::High] {
+    for effort in [
+        Effort::None,
+        Effort::Auto,
+        Effort::Low,
+        Effort::Medium,
+        Effort::High,
+    ] {
         let request = CompletionRequest {
             model: "test-model",
             context: &context,

@@ -2,13 +2,11 @@
 //!
 //! This module is only compiled during tests (`#[cfg(test)]`).
 
-use std::sync::Arc;
 use async_trait::async_trait;
+use std::sync::Arc;
 use tokio::sync::mpsc::Sender;
 
-use crate::inference::{
-    CompletionProvider, CompletionRequest, ProviderError, StreamChunk,
-};
+use crate::inference::{CompletionProvider, CompletionRequest, ProviderError, StreamChunk};
 
 /// A no-op provider for tests that don't need real API calls.
 pub struct NoopProvider;

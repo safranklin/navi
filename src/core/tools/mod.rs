@@ -61,16 +61,18 @@ impl<T: Tool> DynTool for T {
         ToolDefinition {
             name: T::NAME.into(),
             description: T::DESCRIPTION.into(),
-            parameters: serde_json::to_value(schema)
-                .unwrap_or_else(|e| serde_json::json!({"error": format!("Schema generation failed: {e}")})),
+            parameters: serde_json::to_value(schema).unwrap_or_else(
+                |e| serde_json::json!({"error": format!("Schema generation failed: {e}")}),
+            ),
         }
     }
 
     async fn execute(&self, args_json: &str) -> String {
         match serde_json::from_str::<T::Args>(args_json) {
             Ok(args) => match self.call(args).await {
-                Ok(output) => serde_json::to_string(&output)
-                    .unwrap_or_else(|e| serde_json::json!({"error": format!("Serialization failed: {e}")}).to_string()),
+                Ok(output) => serde_json::to_string(&output).unwrap_or_else(|e| {
+                    serde_json::json!({"error": format!("Serialization failed: {e}")}).to_string()
+                }),
                 Err(e) => serde_json::json!({ "error": e.to_string() }).to_string(),
             },
             Err(e) => serde_json::json!({ "error": e.to_string() }).to_string(),
@@ -128,7 +130,7 @@ pub fn default_registry() -> ToolRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arithmetic::{AddTool, AddArgs};
+    use arithmetic::{AddArgs, AddTool};
 
     #[tokio::test]
     async fn test_add_tool_direct() {

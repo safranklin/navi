@@ -57,10 +57,10 @@
 //! This priority order ensures the most important information is always visible,
 //! even on narrow terminals.
 
+use crate::tui::component::Component;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::Span;
-use crate::tui::component::Component;
 
 /// Top status bar component showing model name, status, and notifications.
 ///
@@ -150,16 +150,12 @@ impl Component for TitleBar {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
 
     #[test]
     fn test_title_bar_new() {
-        let title_bar = TitleBar::new(
-            "gpt-4".to_string(),
-            "Loading...".to_string(),
-            false,
-        );
+        let title_bar = TitleBar::new("gpt-4".to_string(), "Loading...".to_string(), false);
 
         assert_eq!(title_bar.model_name, "gpt-4");
         assert_eq!(title_bar.status_message, "Loading...");
@@ -171,11 +167,8 @@ mod tests {
         let backend = TestBackend::new(80, 1);
         let mut terminal = Terminal::new(backend).unwrap();
 
-        let mut title_bar = TitleBar::new(
-            "gpt-4".to_string(),
-            "Reasoning: Extended".to_string(),
-            true,
-        );
+        let mut title_bar =
+            TitleBar::new("gpt-4".to_string(), "Reasoning: Extended".to_string(), true);
 
         terminal
             .draw(|f| {
@@ -184,7 +177,9 @@ mod tests {
             .unwrap();
 
         let buffer = terminal.backend().buffer();
-        let text = buffer.content().iter()
+        let text = buffer
+            .content()
+            .iter()
             .map(|c| c.symbol())
             .collect::<String>();
 
@@ -212,7 +207,9 @@ mod tests {
             .unwrap();
 
         let buffer = terminal.backend().buffer();
-        let text = buffer.content().iter()
+        let text = buffer
+            .content()
+            .iter()
             .map(|c| c.symbol())
             .collect::<String>();
 
@@ -227,11 +224,7 @@ mod tests {
         let backend = TestBackend::new(80, 1);
         let mut terminal = Terminal::new(backend).unwrap();
 
-        let mut title_bar = TitleBar::new(
-            "gpt-4".to_string(),
-            "".to_string(),
-            false,
-        );
+        let mut title_bar = TitleBar::new("gpt-4".to_string(), "".to_string(), false);
 
         terminal
             .draw(|f| {
@@ -240,7 +233,9 @@ mod tests {
             .unwrap();
 
         let buffer = terminal.backend().buffer();
-        let text = buffer.content().iter()
+        let text = buffer
+            .content()
+            .iter()
             .map(|c| c.symbol())
             .collect::<String>();
 
@@ -252,11 +247,7 @@ mod tests {
 
     #[test]
     fn test_title_bar_props_are_mutable() {
-        let mut title_bar = TitleBar::new(
-            "gpt-4".to_string(),
-            "".to_string(),
-            false,
-        );
+        let mut title_bar = TitleBar::new("gpt-4".to_string(), "".to_string(), false);
 
         // Simulate updating props when app state changes
         title_bar.model_name = "claude-opus".to_string();

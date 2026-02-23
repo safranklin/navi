@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 pub enum Source {
@@ -80,7 +80,7 @@ impl Context {
                  NEVER perform arithmetic, math, or calculations yourself — always delegate to the appropriate tool. \
                  If a task requires multiple steps, chain tool calls: call the first tool, wait for its result, then call the next. \
                  Your text responses should only interpret and present tool results, never substitute for them. \
-                 Be direct, be honest about uncertainty, and prefer clarity over hedging."
+                 Be direct, be honest about uncertainty, and prefer clarity over hedging.",
             ),
         };
         Context {
@@ -157,7 +157,8 @@ impl Context {
             content: normalized,
         });
         if let Some(id) = item_id {
-            self.active_streams.insert(id.to_string(), self.items.len() - 1);
+            self.active_streams
+                .insert(id.to_string(), self.items.len() - 1);
         }
     }
 
@@ -196,7 +197,8 @@ impl Context {
             content: normalized,
         });
         if let Some(id) = item_id {
-            self.active_streams.insert(id.to_string(), self.items.len() - 1);
+            self.active_streams
+                .insert(id.to_string(), self.items.len() - 1);
         }
     }
 
@@ -263,8 +265,8 @@ pub struct ToolDefinition {
 /// A completed tool call from the model.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ToolCall {
-    pub id: String,      // API object ID (e.g. "fc_abc123") — needed for input array roundtrip
-    pub call_id: String,  // Correlation ID (e.g. "call_xyz789") — links call to result
+    pub id: String, // API object ID (e.g. "fc_abc123") — needed for input array roundtrip
+    pub call_id: String, // Correlation ID (e.g. "call_xyz789") — links call to result
     pub name: String,
     pub arguments: String, // JSON string
 }
@@ -279,8 +281,14 @@ pub struct ToolResult {
 /// Represents a chunk of streamed content from the model.
 #[derive(Debug)]
 pub enum StreamChunk {
-    Content { text: String, item_id: Option<String> },
-    Thinking { text: String, item_id: Option<String> },
+    Content {
+        text: String,
+        item_id: Option<String>,
+    },
+    Thinking {
+        text: String,
+        item_id: Option<String>,
+    },
     ToolCall(ToolCall), // Complete tool call (arguments buffered by provider)
 }
 
@@ -355,7 +363,7 @@ mod tests {
         assert_eq!(ctx.items.len(), 3);
         assert_eq!(unwrap_message(&ctx.items[2]).content, "response");
     }
-    
+
     #[test]
     fn test_effort_cycle() {
         assert_eq!(Effort::None.next(), Effort::Auto);
@@ -384,7 +392,7 @@ mod tests {
         let mut ctx = Context::new();
         // Add user message
         ctx.add_user_message("hello".to_string());
-        
+
         // Append to non-model message (should create new)
         ctx.append_to_last_model_message("start", None);
         assert_eq!(ctx.items.len(), 3); // System, User, Model
@@ -446,10 +454,16 @@ mod tests {
         let mut ctx = Context::new();
         // Case 1: Typography in new message
         ctx.append_to_last_model_message("Hello “World”", None);
-        assert_eq!(unwrap_message(ctx.items.last().unwrap()).content, "Hello \"World\"");
+        assert_eq!(
+            unwrap_message(ctx.items.last().unwrap()).content,
+            "Hello \"World\""
+        );
 
         // Case 2: Typography in appended chunk
         ctx.append_to_last_model_message("—WAIT", None);
-        assert_eq!(unwrap_message(ctx.items.last().unwrap()).content, "Hello \"World\"--WAIT");
+        assert_eq!(
+            unwrap_message(ctx.items.last().unwrap()).content,
+            "Hello \"World\"--WAIT"
+        );
     }
 }

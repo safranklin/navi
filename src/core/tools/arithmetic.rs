@@ -34,7 +34,9 @@ impl Tool for AddTool {
     type Output = ArithmeticOutput;
 
     async fn call(&self, args: AddArgs) -> Result<ArithmeticOutput, ToolError> {
-        Ok(ArithmeticOutput { result: args.a + args.b })
+        Ok(ArithmeticOutput {
+            result: args.a + args.b,
+        })
     }
 }
 
@@ -58,7 +60,9 @@ impl Tool for SubtractTool {
     type Output = ArithmeticOutput;
 
     async fn call(&self, args: SubtractArgs) -> Result<ArithmeticOutput, ToolError> {
-        Ok(ArithmeticOutput { result: args.a - args.b })
+        Ok(ArithmeticOutput {
+            result: args.a - args.b,
+        })
     }
 }
 
@@ -82,7 +86,9 @@ impl Tool for MultiplyTool {
     type Output = ArithmeticOutput;
 
     async fn call(&self, args: MultiplyArgs) -> Result<ArithmeticOutput, ToolError> {
-        Ok(ArithmeticOutput { result: args.a * args.b })
+        Ok(ArithmeticOutput {
+            result: args.a * args.b,
+        })
     }
 }
 
@@ -100,7 +106,7 @@ pub struct DivideArgs {
 
 #[derive(Serialize)]
 pub struct DivideOutput {
-    pub result: f64
+    pub result: f64,
 }
 
 #[async_trait]

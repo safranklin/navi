@@ -79,8 +79,8 @@ mod title_bar;
 #[allow(unused_imports)] // Used in Phase 4 (integration with main loop)
 pub use title_bar::TitleBar;
 
-pub mod message;
 pub mod input_box;
+pub mod message;
 pub use input_box::{InputBox, InputEvent};
 pub mod message_list;
 pub use message_list::{MessageList, MessageListState};

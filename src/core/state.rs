@@ -20,10 +20,10 @@
 //! State changes only happen through `update(state, action)` in action.rs.
 //! This keeps things predictable, so no surprise mutations.
 
-use std::collections::HashSet;
-use std::sync::Arc;
 use crate::core::tools::ToolRegistry;
 use crate::inference::{CompletionProvider, Context, Effort, ToolDefinition};
+use std::collections::HashSet;
+use std::sync::Arc;
 
 /// Maximum number of agentic tool-calling rounds before the loop is forcibly stopped.
 pub const MAX_AGENTIC_ROUNDS: u8 = 20;

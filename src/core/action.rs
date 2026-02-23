@@ -13,9 +13,9 @@
 //! This makes everything testable: `assert_eq!(update(state, action), expected)`.
 //! And debuggable: log every action, replay the exact session.
 
-use log::{debug, warn};
 use crate::core::state::{App, MAX_AGENTIC_ROUNDS};
 use crate::inference::{ToolCall, ToolResult};
+use log::{debug, warn};
 
 #[derive(Debug)]
 pub enum Action {
@@ -24,15 +24,24 @@ pub enum Action {
     // Submit a user message (TUI passes the message content)
     Submit(String),
     // Receive a chunk of content from the API (streaming)
-    ResponseChunk { text: String, item_id: Option<String> },
+    ResponseChunk {
+        text: String,
+        item_id: Option<String>,
+    },
     // Receive a chunk of thinking/reasoning from the API
-    ThinkingChunk { text: String, item_id: Option<String> },
+    ThinkingChunk {
+        text: String,
+        item_id: Option<String>,
+    },
     // Signal that the streaming response is complete
     ResponseDone,
     // Model wants to call a tool
     ToolCallReceived(ToolCall),
     // A tool execution completed
-    ToolResultReady { call_id: String, output: String },
+    ToolResultReady {
+        call_id: String,
+        output: String,
+    },
 }
 
 #[derive(Debug, PartialEq)]
@@ -46,9 +55,7 @@ pub enum Effect {
 
 pub fn update(app_state: &mut App, action: Action) -> Effect {
     match action {
-        Action::Quit => {
-            Effect::Quit
-        }
+        Action::Quit => Effect::Quit,
         Action::Submit(message) => {
             if message.is_empty() || app_state.is_loading {
                 return Effect::None; // noop on empty input or if already loading
@@ -60,23 +67,35 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
             Effect::SpawnRequest
         }
         Action::ResponseChunk { text, item_id } => {
-            app_state.context.append_to_last_model_message(&text, item_id.as_deref());
+            app_state
+                .context
+                .append_to_last_model_message(&text, item_id.as_deref());
             // Log total message length after append
-            if let Some(crate::inference::ContextItem::Message(last)) = app_state.context.items.last() {
-                debug!("ResponseChunk applied: chunk_len={}, total_msg_len={}", text.len(), last.content.len());
+            if let Some(crate::inference::ContextItem::Message(last)) =
+                app_state.context.items.last()
+            {
+                debug!(
+                    "ResponseChunk applied: chunk_len={}, total_msg_len={}",
+                    text.len(),
+                    last.content.len()
+                );
             }
             app_state.status_message = String::from("Receiving...");
             Effect::Render
         }
         Action::ThinkingChunk { text, item_id } => {
-            app_state.context.append_to_last_thinking_message(&text, item_id.as_deref());
+            app_state
+                .context
+                .append_to_last_thinking_message(&text, item_id.as_deref());
             debug!("ThinkingChunk applied: chunk_len={}", text.len());
             app_state.status_message = String::from("Thinking...");
             Effect::Render
         }
         Action::ResponseDone => {
             app_state.context.clear_active_streams();
-            if let Some(crate::inference::ContextItem::Message(last)) = app_state.context.items.last() {
+            if let Some(crate::inference::ContextItem::Message(last)) =
+                app_state.context.items.last()
+            {
                 debug!("ResponseDone: final message length={}", last.content.len());
             }
             if app_state.pending_tool_calls.is_empty() {
@@ -88,20 +107,24 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
         }
         Action::ToolCallReceived(tool_call) => {
             if tool_call.call_id.is_empty() {
-                warn!("Received tool call with empty call_id, skipping: {}", tool_call.name);
+                warn!(
+                    "Received tool call with empty call_id, skipping: {}",
+                    tool_call.name
+                );
                 return Effect::Render;
             }
-            app_state.pending_tool_calls.insert(tool_call.call_id.clone());
+            app_state
+                .pending_tool_calls
+                .insert(tool_call.call_id.clone());
             app_state.context.add_tool_call(tool_call.clone());
             app_state.status_message = format!("Calling: {}...", tool_call.name);
             Effect::ExecuteTool(tool_call)
         }
         Action::ToolResultReady { call_id, output } => {
             app_state.pending_tool_calls.remove(&call_id);
-            app_state.context.add_tool_result(ToolResult {
-                call_id,
-                output,
-            });
+            app_state
+                .context
+                .add_tool_result(ToolResult { call_id, output });
 
             if app_state.pending_tool_calls.is_empty() {
                 app_state.agentic_rounds += 1;
@@ -128,7 +151,6 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -164,7 +186,9 @@ mod tests {
         let effect = update(&mut app, Action::Submit("Hello, model!".to_string()));
 
         assert_eq!(app.context.items.len(), 2); // System + User
-        assert!(matches!(&app.context.items[1], ContextItem::Message(seg) if seg.content == "Hello, model!"));
+        assert!(
+            matches!(&app.context.items[1], ContextItem::Message(seg) if seg.content == "Hello, model!")
+        );
         assert!(app.is_loading);
         assert_eq!(effect, Effect::SpawnRequest);
     }
@@ -174,10 +198,18 @@ mod tests {
         let mut app = test_app();
         app.is_loading = true;
 
-        let effect = update(&mut app, Action::ResponseChunk { text: "Response ".to_string(), item_id: None });
+        let effect = update(
+            &mut app,
+            Action::ResponseChunk {
+                text: "Response ".to_string(),
+                item_id: None,
+            },
+        );
 
         assert_eq!(app.context.items.len(), 2); // System + Model (new)
-        assert!(matches!(&app.context.items[1], ContextItem::Message(seg) if seg.content == "Response " && seg.source == Source::Model));
+        assert!(
+            matches!(&app.context.items[1], ContextItem::Message(seg) if seg.content == "Response " && seg.source == Source::Model)
+        );
         assert!(app.is_loading);
         assert_eq!(app.status_message, "Receiving...");
         assert_eq!(effect, Effect::Render);
@@ -223,10 +255,13 @@ mod tests {
         app.is_loading = true;
         app.pending_tool_calls.insert("call_1".to_string());
 
-        let effect = update(&mut app, Action::ToolResultReady {
-            call_id: "call_1".to_string(),
-            output: r#"{"temp": 72}"#.to_string(),
-        });
+        let effect = update(
+            &mut app,
+            Action::ToolResultReady {
+                call_id: "call_1".to_string(),
+                output: r#"{"temp": 72}"#.to_string(),
+            },
+        );
 
         assert!(app.pending_tool_calls.is_empty());
         assert_eq!(effect, Effect::SpawnRequest);
@@ -239,10 +274,13 @@ mod tests {
         app.pending_tool_calls.insert("call_1".to_string());
         app.pending_tool_calls.insert("call_2".to_string());
 
-        let effect = update(&mut app, Action::ToolResultReady {
-            call_id: "call_1".to_string(),
-            output: "done".to_string(),
-        });
+        let effect = update(
+            &mut app,
+            Action::ToolResultReady {
+                call_id: "call_1".to_string(),
+                output: "done".to_string(),
+            },
+        );
 
         assert_eq!(app.pending_tool_calls.len(), 1);
         assert_eq!(effect, Effect::Render);
@@ -273,10 +311,13 @@ mod tests {
         app.agentic_rounds = MAX_AGENTIC_ROUNDS;
         app.pending_tool_calls.insert("call_1".to_string());
 
-        let effect = update(&mut app, Action::ToolResultReady {
-            call_id: "call_1".to_string(),
-            output: r#"{"result": 42}"#.to_string(),
-        });
+        let effect = update(
+            &mut app,
+            Action::ToolResultReady {
+                call_id: "call_1".to_string(),
+                output: r#"{"result": 42}"#.to_string(),
+            },
+        );
 
         assert_eq!(effect, Effect::Render);
         assert!(!app.is_loading);

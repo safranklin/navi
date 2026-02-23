@@ -138,7 +138,7 @@ struct FunctionCallArgsDoneEvent {
 /// Tracks a tool call across multiple SSE events (added → delta* → done).
 struct PendingToolCall {
     id: String,      // API object ID (e.g. "fc_abc123")
-    call_id: String,  // Correlation ID (e.g. "call_xyz789")
+    call_id: String, // Correlation ID (e.g. "call_xyz789")
 }
 
 // ============================================================================
@@ -155,18 +155,16 @@ fn context_to_input(context: &Context) -> Vec<InputItem> {
         .items
         .iter()
         .filter_map(|item| match item {
-            ContextItem::Message(seg) => {
-                match seg.source {
-                    Source::Directive => Some(Role::System),
-                    Source::User => Some(Role::User),
-                    Source::Model => Some(Role::Assistant),
-                    Source::Thinking | Source::Status => None,
-                }
-                .map(|role| InputItem::Message {
-                    role,
-                    content: seg.content.clone(),
-                })
+            ContextItem::Message(seg) => match seg.source {
+                Source::Directive => Some(Role::System),
+                Source::User => Some(Role::User),
+                Source::Model => Some(Role::Assistant),
+                Source::Thinking | Source::Status => None,
             }
+            .map(|role| InputItem::Message {
+                role,
+                content: seg.content.clone(),
+            }),
             ContextItem::ToolCall(tc) => Some(InputItem::FunctionCall {
                 id: tc.id.clone(),
                 call_id: tc.call_id.clone(),
@@ -206,7 +204,10 @@ fn tools_to_api(tools: &[ToolDefinition]) -> Option<Vec<ApiToolDefinition>> {
 /// Maps our Effort enum to a Reasoning config for the Responses API.
 fn effort_to_reasoning(effort: Effort) -> Reasoning {
     match effort {
-        Effort::Auto => Reasoning { effort: None, enabled: Some(true) },
+        Effort::Auto => Reasoning {
+            effort: None,
+            enabled: Some(true),
+        },
         other => {
             let effort = match other {
                 Effort::High => "high",
@@ -215,7 +216,10 @@ fn effort_to_reasoning(effort: Effort) -> Reasoning {
                 Effort::None => "none",
                 Effort::Auto => unreachable!(),
             };
-            Reasoning { effort: Some(effort), enabled: None }
+            Reasoning {
+                effort: Some(effort),
+                enabled: None,
+            }
         }
     }
 }
@@ -371,7 +375,10 @@ impl CompletionProvider for OpenRouterProvider {
                                     total_content_len
                                 );
                                 if sender
-                                    .send(StreamChunk::Content { text: event.delta, item_id: non_empty(event.item_id) })
+                                    .send(StreamChunk::Content {
+                                        text: event.delta,
+                                        item_id: non_empty(event.item_id),
+                                    })
                                     .await
                                     .is_err()
                                 {
@@ -380,14 +387,18 @@ impl CompletionProvider for OpenRouterProvider {
                                 }
                             }
                         }
-                        Some("response.reasoning_summary_text.delta") | Some("response.reasoning_text.delta") => {
+                        Some("response.reasoning_summary_text.delta")
+                        | Some("response.reasoning_text.delta") => {
                             if let Ok(event) = serde_json::from_str::<SseEvent>(data)
                                 && !event.delta.is_empty()
                             {
                                 chunk_count += 1;
                                 debug!("Sending Thinking chunk (len={})", event.delta.len());
                                 if sender
-                                    .send(StreamChunk::Thinking { text: event.delta, item_id: non_empty(event.item_id) })
+                                    .send(StreamChunk::Thinking {
+                                        text: event.delta,
+                                        item_id: non_empty(event.item_id),
+                                    })
                                     .await
                                     .is_err()
                                 {
@@ -398,29 +409,43 @@ impl CompletionProvider for OpenRouterProvider {
                         }
                         Some("response.output_item.added") => {
                             if let Ok(event) = serde_json::from_str::<OutputItemAddedEvent>(data)
-                                && event.item.item_type == "function_call" {
-                                    debug!("Tool call started: {} (item_id={}, call_id={})", event.item.name, event.item.id, event.item.call_id);
-                                    pending_tools.insert(event.item.id.clone(), PendingToolCall {
+                                && event.item.item_type == "function_call"
+                            {
+                                debug!(
+                                    "Tool call started: {} (item_id={}, call_id={})",
+                                    event.item.name, event.item.id, event.item.call_id
+                                );
+                                pending_tools.insert(
+                                    event.item.id.clone(),
+                                    PendingToolCall {
                                         id: event.item.id,
                                         call_id: event.item.call_id,
-                                    });
+                                    },
+                                );
                             }
                         }
                         Some("response.function_call_arguments.delta") => {
                             // Delta events are ignored — the done event contains the full arguments.
                             // We parse the event only to validate the item_id correlation.
-                            if let Ok(event) = serde_json::from_str::<FunctionCallArgsDeltaEvent>(data)
-                                && !pending_tools.contains_key(&event.item_id) {
-                                    warn!("Argument delta for unknown item_id: {}", event.item_id);
+                            if let Ok(event) =
+                                serde_json::from_str::<FunctionCallArgsDeltaEvent>(data)
+                                && !pending_tools.contains_key(&event.item_id)
+                            {
+                                warn!("Argument delta for unknown item_id: {}", event.item_id);
                             }
                         }
                         Some("response.function_call_arguments.done") => {
-                            if let Ok(event) = serde_json::from_str::<FunctionCallArgsDoneEvent>(data) {
+                            if let Ok(event) =
+                                serde_json::from_str::<FunctionCallArgsDoneEvent>(data)
+                            {
                                 let pending = pending_tools.remove(&event.item_id);
                                 let (id, call_id) = match pending {
                                     Some(p) => (p.id, p.call_id),
                                     None => {
-                                        warn!("arguments.done for unknown item_id: {}, skipping", event.item_id);
+                                        warn!(
+                                            "arguments.done for unknown item_id: {}, skipping",
+                                            event.item_id
+                                        );
                                         continue;
                                     }
                                 };
@@ -430,7 +455,10 @@ impl CompletionProvider for OpenRouterProvider {
                                     name: event.name.clone(),
                                     arguments: event.arguments,
                                 };
-                                debug!("Tool call complete: {} (item_id={}, call_id={})", event.name, event.item_id, tool_call.call_id);
+                                debug!(
+                                    "Tool call complete: {} (item_id={}, call_id={})",
+                                    event.name, event.item_id, tool_call.call_id
+                                );
                                 chunk_count += 1;
                                 if sender.send(StreamChunk::ToolCall(tool_call)).await.is_err() {
                                     warn!("ToolCall send failed: receiver dropped");
@@ -502,9 +530,19 @@ mod tests {
         // Should have 3 items: Directive (from Context::new), User, and Model
         // Thinking should be filtered out
         assert_eq!(input.len(), 3);
-        assert!(matches!(&input[0], InputItem::Message { role: Role::System, .. }));
-        assert!(matches!(&input[1], InputItem::Message { role: Role::User, content } if content == "Hello"));
-        assert!(matches!(&input[2], InputItem::Message { role: Role::Assistant, content } if content == "Response"));
+        assert!(matches!(
+            &input[0],
+            InputItem::Message {
+                role: Role::System,
+                ..
+            }
+        ));
+        assert!(
+            matches!(&input[1], InputItem::Message { role: Role::User, content } if content == "Hello")
+        );
+        assert!(
+            matches!(&input[2], InputItem::Message { role: Role::Assistant, content } if content == "Response")
+        );
     }
 
     #[test]
@@ -528,9 +566,15 @@ mod tests {
         let input = context_to_input(&context);
 
         assert_eq!(input.len(), 3);
-        assert!(matches!(&input[0], InputItem::Message { role: Role::System, content } if content == "System message"));
-        assert!(matches!(&input[1], InputItem::Message { role: Role::User, content } if content == "User message"));
-        assert!(matches!(&input[2], InputItem::Message { role: Role::Assistant, content } if content == "Model message"));
+        assert!(
+            matches!(&input[0], InputItem::Message { role: Role::System, content } if content == "System message")
+        );
+        assert!(
+            matches!(&input[1], InputItem::Message { role: Role::User, content } if content == "User message")
+        );
+        assert!(
+            matches!(&input[2], InputItem::Message { role: Role::Assistant, content } if content == "Model message")
+        );
     }
 
     #[test]

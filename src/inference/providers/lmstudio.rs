@@ -134,18 +134,16 @@ fn context_to_input(context: &Context) -> Vec<InputItem> {
         .items
         .iter()
         .filter_map(|item| match item {
-            ContextItem::Message(seg) => {
-                match seg.source {
-                    Source::Directive => Some(Role::System),
-                    Source::User => Some(Role::User),
-                    Source::Model => Some(Role::Assistant),
-                    Source::Thinking | Source::Status => None,
-                }
-                .map(|role| InputItem::Message {
-                    role,
-                    content: seg.content.clone(),
-                })
+            ContextItem::Message(seg) => match seg.source {
+                Source::Directive => Some(Role::System),
+                Source::User => Some(Role::User),
+                Source::Model => Some(Role::Assistant),
+                Source::Thinking | Source::Status => None,
             }
+            .map(|role| InputItem::Message {
+                role,
+                content: seg.content.clone(),
+            }),
             ContextItem::ToolCall(tc) => Some(InputItem::FunctionCall {
                 id: tc.id.clone(),
                 call_id: tc.call_id.clone(),
@@ -185,7 +183,10 @@ fn tools_to_api(tools: &[ToolDefinition]) -> Option<Vec<ApiToolDefinition>> {
 /// Maps our Effort enum to a Reasoning config for the Responses API.
 fn effort_to_reasoning(effort: Effort) -> Reasoning {
     match effort {
-        Effort::Auto => Reasoning { effort: None, enabled: Some(true) },
+        Effort::Auto => Reasoning {
+            effort: None,
+            enabled: Some(true),
+        },
         other => {
             let effort = match other {
                 Effort::High => "high",
@@ -194,7 +195,10 @@ fn effort_to_reasoning(effort: Effort) -> Reasoning {
                 Effort::None => "none",
                 Effort::Auto => unreachable!(),
             };
-            Reasoning { effort: Some(effort), enabled: None }
+            Reasoning {
+                effort: Some(effort),
+                enabled: None,
+            }
         }
     }
 }
@@ -317,7 +321,11 @@ impl CompletionProvider for LmStudioProvider {
 
                 // Parse SSE data
                 if let Some(data) = line.strip_prefix("data: ") {
-                    debug!("SSE data for event {:?}: {} bytes", current_event_type, data.len());
+                    debug!(
+                        "SSE data for event {:?}: {} bytes",
+                        current_event_type,
+                        data.len()
+                    );
                     match current_event_type.as_deref() {
                         Some("response.output_text.delta") => {
                             if let Ok(event) = serde_json::from_str::<DeltaEvent>(data)
@@ -331,7 +339,10 @@ impl CompletionProvider for LmStudioProvider {
                                     total_content_len
                                 );
                                 if sender
-                                    .send(StreamChunk::Content { text: event.delta, item_id: non_empty(event.item_id) })
+                                    .send(StreamChunk::Content {
+                                        text: event.delta,
+                                        item_id: non_empty(event.item_id),
+                                    })
                                     .await
                                     .is_err()
                                 {
@@ -347,7 +358,10 @@ impl CompletionProvider for LmStudioProvider {
                                 chunk_count += 1;
                                 debug!("Sending Thinking chunk (len={})", event.delta.len());
                                 if sender
-                                    .send(StreamChunk::Thinking { text: event.delta, item_id: non_empty(event.item_id) })
+                                    .send(StreamChunk::Thinking {
+                                        text: event.delta,
+                                        item_id: non_empty(event.item_id),
+                                    })
                                     .await
                                     .is_err()
                                 {
@@ -358,12 +372,16 @@ impl CompletionProvider for LmStudioProvider {
                         }
                         Some("response.output_item.added") => {
                             if let Ok(event) = serde_json::from_str::<OutputItemAddedEvent>(data)
-                                && event.item.item_type == "function_call" {
-                                    debug!("Tool call started: {} (id={}, call_id={})", event.item.name, event.item.id, event.item.call_id);
-                                    pending_tool_id = Some(event.item.id);
-                                    pending_tool_call_id = Some(event.item.call_id);
-                                    _pending_tool_name = Some(event.item.name);
-                                    pending_tool_args.clear();
+                                && event.item.item_type == "function_call"
+                            {
+                                debug!(
+                                    "Tool call started: {} (id={}, call_id={})",
+                                    event.item.name, event.item.id, event.item.call_id
+                                );
+                                pending_tool_id = Some(event.item.id);
+                                pending_tool_call_id = Some(event.item.call_id);
+                                _pending_tool_name = Some(event.item.name);
+                                pending_tool_args.clear();
                             }
                         }
                         Some("response.function_call_arguments.delta") => {
@@ -372,7 +390,9 @@ impl CompletionProvider for LmStudioProvider {
                             }
                         }
                         Some("response.function_call_arguments.done") => {
-                            if let Ok(event) = serde_json::from_str::<FunctionCallArgsDoneEvent>(data) {
+                            if let Ok(event) =
+                                serde_json::from_str::<FunctionCallArgsDoneEvent>(data)
+                            {
                                 let call_id = pending_tool_call_id.take().unwrap_or_default();
                                 let tool_call = crate::inference::ToolCall {
                                     id: pending_tool_id.take().unwrap_or_default(),
@@ -380,7 +400,10 @@ impl CompletionProvider for LmStudioProvider {
                                     name: event.name.clone(),
                                     arguments: event.arguments,
                                 };
-                                debug!("Tool call complete: {} (call_id={})", event.name, tool_call.call_id);
+                                debug!(
+                                    "Tool call complete: {} (call_id={})",
+                                    event.name, tool_call.call_id
+                                );
                                 _pending_tool_name = None;
                                 pending_tool_args.clear();
                                 chunk_count += 1;
@@ -445,9 +468,19 @@ mod tests {
         let input = context_to_input(&context);
 
         assert_eq!(input.len(), 3);
-        assert!(matches!(&input[0], InputItem::Message { role: Role::System, .. }));
-        assert!(matches!(&input[1], InputItem::Message { role: Role::User, content } if content == "Hello"));
-        assert!(matches!(&input[2], InputItem::Message { role: Role::Assistant, content } if content == "Response"));
+        assert!(matches!(
+            &input[0],
+            InputItem::Message {
+                role: Role::System,
+                ..
+            }
+        ));
+        assert!(
+            matches!(&input[1], InputItem::Message { role: Role::User, content } if content == "Hello")
+        );
+        assert!(
+            matches!(&input[2], InputItem::Message { role: Role::Assistant, content } if content == "Response")
+        );
     }
 
     #[test]
@@ -471,9 +504,15 @@ mod tests {
         let input = context_to_input(&context);
 
         assert_eq!(input.len(), 3);
-        assert!(matches!(&input[0], InputItem::Message { role: Role::System, content } if content == "System message"));
-        assert!(matches!(&input[1], InputItem::Message { role: Role::User, content } if content == "User message"));
-        assert!(matches!(&input[2], InputItem::Message { role: Role::Assistant, content } if content == "Model message"));
+        assert!(
+            matches!(&input[0], InputItem::Message { role: Role::System, content } if content == "System message")
+        );
+        assert!(
+            matches!(&input[1], InputItem::Message { role: Role::User, content } if content == "User message")
+        );
+        assert!(
+            matches!(&input[2], InputItem::Message { role: Role::Assistant, content } if content == "Model message")
+        );
     }
 
     #[test]

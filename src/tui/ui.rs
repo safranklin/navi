@@ -1,12 +1,12 @@
 use crate::core::state::App;
 use crate::tui::TuiState;
-use crate::tui::components::{TitleBar, MessageList};
 use crate::tui::component::Component;
+use crate::tui::components::{MessageList, TitleBar};
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::widgets::{Block, Paragraph}; 
 use ratatui::layout::Alignment;
+use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::widgets::{Block, Paragraph};
 
 pub fn draw_ui(frame: &mut Frame, app: &App, tui: &mut TuiState, spinner_frame: usize) {
     use Constraint::{Length, Min};
@@ -20,7 +20,7 @@ pub fn draw_ui(frame: &mut Frame, app: &App, tui: &mut TuiState, spinner_frame: 
 
     // 1. Render Main Area (MessageList or Error)
     // Rendered first so MessageList::render updates layout cache in TuiState.
-    
+
     // Check if there are any user-visible messages (User or Model)
     let has_visible_messages = app.context.items.iter().any(|item|
         matches!(item, crate::inference::ContextItem::Message(seg) if matches!(seg.source, crate::inference::Source::User | crate::inference::Source::Model))
@@ -50,7 +50,7 @@ pub fn draw_ui(frame: &mut Frame, app: &App, tui: &mut TuiState, spinner_frame: 
         let state = &tui.message_list;
         let total_height: u16 = state.layout.heights.iter().sum();
         let visible_height = main_area.height;
-        
+
         if total_height <= visible_height {
             false
         } else {
@@ -63,7 +63,7 @@ pub fn draw_ui(frame: &mut Frame, app: &App, tui: &mut TuiState, spinner_frame: 
     let mut title_bar = TitleBar::new(
         app.model_name.clone(),
         app.status_message.clone(),
-        has_unseen_content
+        has_unseen_content,
     );
     title_bar.render(frame, title_area);
 

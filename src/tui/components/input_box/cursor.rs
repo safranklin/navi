@@ -4,11 +4,10 @@
 //! All navigation methods accept `buffer: &str` explicitly — the text data is
 //! owned by `InputBox`, keeping the dependency visible.
 
-use ratatui::layout::Rect;
 use super::text_wrap::{
-    inner_width, wrap_options, wrap_line_count,
-    MAX_VISIBLE_LINES, BORDER_OFFSET,
+    BORDER_OFFSET, MAX_VISIBLE_LINES, inner_width, wrap_line_count, wrap_options,
 };
+use ratatui::layout::Rect;
 
 /// Cursor and scroll state, separated from the text buffer.
 pub(super) struct CursorState {
@@ -155,7 +154,10 @@ impl CursorState {
 
         // Calculate cursor column by counting chars from last newline (preserves spaces!).
         // textwrap trims trailing whitespace, so we can't use wrapped line length.
-        let last_newline = text_before_cursor.rfind('\n').map(|pos| pos + 1).unwrap_or(0);
+        let last_newline = text_before_cursor
+            .rfind('\n')
+            .map(|pos| pos + 1)
+            .unwrap_or(0);
         let logical_line_to_cursor = &text_before_cursor[last_newline..];
 
         // Wrap just the current logical line to find which wrapped segment we're on
@@ -164,7 +166,8 @@ impl CursorState {
         let cursor_col = if logical_line_wrapped.is_empty() {
             0
         } else {
-            let chars_in_prev_segments: usize = logical_line_wrapped.iter()
+            let chars_in_prev_segments: usize = logical_line_wrapped
+                .iter()
                 .take(logical_line_wrapped.len() - 1)
                 .map(|seg| seg.chars().count())
                 .sum();
