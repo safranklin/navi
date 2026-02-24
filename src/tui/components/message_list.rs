@@ -192,10 +192,7 @@ impl<'a> Component for MessageList<'a> {
         }
 
         let scroll_offset = self.state.scroll_state.offset().y;
-        let visible_range = self
-            .state
-            .layout
-            .visible_range(scroll_offset, area.height);
+        let visible_range = self.state.layout.visible_range(scroll_offset, area.height);
 
         // 3. Render visible segments into a ScrollView
         // Canvas includes logo padding so scroll_to_bottom leaves room for the overlay.
@@ -214,8 +211,7 @@ impl<'a> Component for MessageList<'a> {
             let height = self.state.layout.heights[i];
 
             let is_last = i == num_items.saturating_sub(1);
-            let is_selected =
-                self.state.selected_index == Some(i) && !(is_last && self.is_loading);
+            let is_selected = self.state.selected_index == Some(i) && !(is_last && self.is_loading);
 
             let segment_rect = Rect::new(0, y_offset, content_width, height);
 

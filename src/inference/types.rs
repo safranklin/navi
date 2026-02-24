@@ -290,6 +290,11 @@ pub enum StreamChunk {
         item_id: Option<String>,
     },
     ToolCall(ToolCall), // Complete tool call (arguments buffered by provider)
+    /// Signals stream completion. Carries the server's response ID for prompt caching.
+    /// Providers send this as their final chunk before returning Ok(()).
+    Completed {
+        response_id: Option<String>,
+    },
 }
 
 #[cfg(test)]

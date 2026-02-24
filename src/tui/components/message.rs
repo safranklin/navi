@@ -56,11 +56,7 @@ impl<'a> Message<'a> {
     /// Creates a new Message component for rendering.
     ///
     /// This is typically called within `MessageList::render()` for each visible segment.
-    pub fn new(
-        segment: &'a ContextSegment,
-        is_selected: bool,
-        pulse_intensity: f32,
-    ) -> Self {
+    pub fn new(segment: &'a ContextSegment, is_selected: bool, pulse_intensity: f32) -> Self {
         Self {
             segment,
             is_selected,

@@ -467,11 +467,24 @@ impl CompletionProvider for OpenRouterProvider {
                             }
                         }
                         Some("response.completed") => {
+                            let response_id = serde_json::from_str::<serde_json::Value>(data)
+                                .ok()
+                                .and_then(|v| {
+                                    v.get("response")?.get("id")?.as_str().map(String::from)
+                                });
                             info!(
-                                "Stream complete: {} chunks, {} total content bytes",
-                                chunk_count, total_content_len
+                                "Stream complete: {} chunks, {} content bytes, response_id={:?}",
+                                chunk_count, total_content_len, response_id
                             );
                             debug!("response.completed data: {}", data);
+                            if sender
+                                .send(StreamChunk::Completed { response_id })
+                                .await
+                                .is_err()
+                            {
+                                warn!("Completed send failed: receiver dropped");
+                                return Err(ProviderError::ChannelClosed);
+                            }
                             return Ok(());
                         }
                         Some(other) => {

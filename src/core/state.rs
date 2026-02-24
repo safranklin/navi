@@ -14,7 +14,9 @@
 //! ├── error: Option<String>         // error message
 //! ├── registry: Arc<ToolRegistry>   // tool registry
 //! ├── pending_tool_calls: HashSet   // call_ids awaiting results
-//! └── agentic_rounds: u8           // loop iteration counter
+//! ├── agentic_rounds: u8           // loop iteration counter
+//! ├── last_response_id: Option<String>  // server response ID for caching
+//! └── context_watermark: usize     // items cached server-side
 //! ```
 //!
 //! State changes only happen through `update(state, action)` in action.rs.
@@ -39,6 +41,11 @@ pub struct App {
     pub registry: Arc<ToolRegistry>,
     pub pending_tool_calls: HashSet<String>, // call_ids awaiting results
     pub agentic_rounds: u8,
+    /// Server's response ID from the last successful completion (for prompt caching).
+    pub last_response_id: Option<String>,
+    /// Index into context.items up to which the server has cached.
+    /// Items before this index are reconstructed server-side via previous_response_id.
+    pub context_watermark: usize,
 }
 
 impl App {
@@ -54,6 +61,8 @@ impl App {
             registry: Arc::new(crate::core::tools::default_registry()),
             pending_tool_calls: HashSet::new(),
             agentic_rounds: 0,
+            last_response_id: None,
+            context_watermark: 0,
         }
     }
 

@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::Sender;
 
 use crate::inference::{
-    CompletionProvider, CompletionRequest, Context, ContextItem, Effort, ProviderError, Source,
-    StreamChunk, ToolDefinition,
+    CompletionProvider, CompletionRequest, ContextItem, Effort, ProviderError, Source, StreamChunk,
+    ToolDefinition,
 };
 
 // ============================================================================
@@ -78,6 +78,8 @@ struct ResponsesRequest {
     reasoning: Reasoning,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<ApiToolDefinition>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    previous_response_id: Option<String>,
 }
 
 /// SSE event for delta content (used for both text and reasoning)
@@ -114,8 +116,10 @@ struct OutputItemData {
 /// SSE event for response.function_call_arguments.done
 /// Note: this event has `item_id` (not `call_id`). The call_id comes from
 /// the earlier `response.output_item.added` event and must be captured there.
+/// LM Studio omits `name` here (it's in the earlier `output_item.added` event).
 #[derive(Deserialize, Debug)]
 struct FunctionCallArgsDoneEvent {
+    #[serde(default)]
     name: String,
     arguments: String,
 }
@@ -124,14 +128,14 @@ struct FunctionCallArgsDoneEvent {
 // Translation Layer
 // ============================================================================
 
-/// Converts Navi's Context into Responses API input format.
+/// Converts context items into Responses API input format.
 ///
+/// Accepts a slice of ContextItems (full or partial) to support prompt caching.
 /// Produces a polymorphic input array: messages, function calls, and function call outputs.
 /// Filters out Thinking segments (reasoning is model-generated, not input).
-fn context_to_input(context: &Context) -> Vec<InputItem> {
+fn context_to_input(items: &[ContextItem]) -> Vec<InputItem> {
     let mut fco_counter = 0usize;
-    context
-        .items
+    items
         .iter()
         .filter_map(|item| match item {
             ContextItem::Message(seg) => match seg.source {
@@ -225,40 +229,16 @@ impl LmStudioProvider {
             client: reqwest::Client::new(),
         }
     }
-}
 
-#[async_trait]
-impl CompletionProvider for LmStudioProvider {
-    async fn stream_completion(
+    /// Sends a request to the Responses endpoint and returns the response.
+    async fn send_request(
         &self,
-        request: CompletionRequest<'_>,
-        sender: Sender<StreamChunk>,
-    ) -> Result<(), ProviderError> {
-        let reasoning = effort_to_reasoning(request.effort);
-
-        // Translate domain types to Responses API format
-        let input = context_to_input(request.context);
-
-        let responses_request = ResponsesRequest {
-            model: request.model.to_string(),
-            input,
-            stream: Some(true),
-            reasoning,
-            tools: tools_to_api(request.tools),
-        };
-
-        info!(
-            "LM Studio Responses API request: model={}, input_count={}, effort={:?}",
-            request.model,
-            responses_request.input.len(),
-            request.effort
-        );
-
-        // Make the API request to the Responses endpoint (no auth for local LM Studio)
+        request: &ResponsesRequest,
+    ) -> Result<reqwest::Response, ProviderError> {
         let response = self
             .client
             .post(format!("{}/responses", self.base_url))
-            .json(&responses_request)
+            .json(request)
             .send()
             .await
             .map_err(|e| ProviderError::Network(e.to_string()))?;
@@ -278,6 +258,81 @@ impl CompletionProvider for LmStudioProvider {
             });
         }
 
+        Ok(response)
+    }
+}
+
+#[async_trait]
+impl CompletionProvider for LmStudioProvider {
+    async fn stream_completion(
+        &self,
+        request: CompletionRequest<'_>,
+        sender: Sender<StreamChunk>,
+    ) -> Result<(), ProviderError> {
+        let reasoning = effort_to_reasoning(request.effort);
+
+        // Determine if we can use prompt caching (partial input + previous_response_id)
+        let (input_items, prev_id) = if let Some(prev_response_id) = request.previous_response_id
+            && request.context_watermark > 0
+            && request.context_watermark <= request.context.items.len()
+        {
+            info!(
+                "Prompt caching: sending items[{}..] with previous_response_id",
+                request.context_watermark
+            );
+            (
+                &request.context.items[request.context_watermark..],
+                Some(prev_response_id.to_string()),
+            )
+        } else {
+            (&request.context.items[..], None)
+        };
+
+        let input = context_to_input(input_items);
+
+        let responses_request = ResponsesRequest {
+            model: request.model.to_string(),
+            input,
+            stream: Some(true),
+            reasoning,
+            tools: tools_to_api(request.tools),
+            previous_response_id: prev_id.clone(),
+        };
+
+        info!(
+            "LM Studio Responses API request: model={}, input_count={}, effort={:?}, cached={}",
+            request.model,
+            responses_request.input.len(),
+            request.effort,
+            prev_id.is_some()
+        );
+
+        let response = self.send_request(&responses_request).await;
+
+        // Fallback: if we used previous_response_id and got 400, retry with full context
+        let response = match response {
+            Err(ProviderError::Api {
+                status: 400,
+                ref message,
+            }) if prev_id.is_some() => {
+                warn!(
+                    "Prompt cache miss (400): {}. Retrying with full context.",
+                    message
+                );
+                let full_input = context_to_input(&request.context.items[..]);
+                let fallback_request = ResponsesRequest {
+                    model: request.model.to_string(),
+                    input: full_input,
+                    stream: Some(true),
+                    reasoning: effort_to_reasoning(request.effort),
+                    tools: tools_to_api(request.tools),
+                    previous_response_id: None,
+                };
+                self.send_request(&fallback_request).await?
+            }
+            other => other?,
+        };
+
         // Process the SSE stream with typed events
         let mut buffer = String::new();
         let mut current_event_type: Option<String> = None;
@@ -288,7 +343,7 @@ impl CompletionProvider for LmStudioProvider {
         // Tool call buffering state
         let mut pending_tool_id: Option<String> = None;
         let mut pending_tool_call_id: Option<String> = None;
-        let mut _pending_tool_name: Option<String> = None;
+        let mut pending_tool_name: Option<String> = None;
         let mut pending_tool_args = String::new();
 
         while let Some(chunk) = response
@@ -380,7 +435,7 @@ impl CompletionProvider for LmStudioProvider {
                                 );
                                 pending_tool_id = Some(event.item.id);
                                 pending_tool_call_id = Some(event.item.call_id);
-                                _pending_tool_name = Some(event.item.name);
+                                pending_tool_name = Some(event.item.name);
                                 pending_tool_args.clear();
                             }
                         }
@@ -394,17 +449,24 @@ impl CompletionProvider for LmStudioProvider {
                                 serde_json::from_str::<FunctionCallArgsDoneEvent>(data)
                             {
                                 let call_id = pending_tool_call_id.take().unwrap_or_default();
+                                // LM Studio omits `name` from arguments.done — fall back to
+                                // the name captured during output_item.added.
+                                let name = if event.name.is_empty() {
+                                    pending_tool_name.take().unwrap_or_default()
+                                } else {
+                                    pending_tool_name = None;
+                                    event.name
+                                };
                                 let tool_call = crate::inference::ToolCall {
                                     id: pending_tool_id.take().unwrap_or_default(),
                                     call_id,
-                                    name: event.name.clone(),
+                                    name: name.clone(),
                                     arguments: event.arguments,
                                 };
                                 debug!(
                                     "Tool call complete: {} (call_id={})",
-                                    event.name, tool_call.call_id
+                                    name, tool_call.call_id
                                 );
-                                _pending_tool_name = None;
                                 pending_tool_args.clear();
                                 chunk_count += 1;
                                 if sender.send(StreamChunk::ToolCall(tool_call)).await.is_err() {
@@ -414,11 +476,24 @@ impl CompletionProvider for LmStudioProvider {
                             }
                         }
                         Some("response.completed") => {
+                            let response_id = serde_json::from_str::<serde_json::Value>(data)
+                                .ok()
+                                .and_then(|v| {
+                                    v.get("response")?.get("id")?.as_str().map(String::from)
+                                });
                             info!(
-                                "Stream complete: {} chunks, {} total content bytes",
-                                chunk_count, total_content_len
+                                "Stream complete: {} chunks, {} content bytes, response_id={:?}",
+                                chunk_count, total_content_len, response_id
                             );
                             debug!("response.completed data: {}", data);
+                            if sender
+                                .send(StreamChunk::Completed { response_id })
+                                .await
+                                .is_err()
+                            {
+                                warn!("Completed send failed: receiver dropped");
+                                return Err(ProviderError::ChannelClosed);
+                            }
                             return Ok(());
                         }
                         Some(other) => {
@@ -465,7 +540,7 @@ mod tests {
             content: "Response".to_string(),
         });
 
-        let input = context_to_input(&context);
+        let input = context_to_input(&context.items);
 
         assert_eq!(input.len(), 3);
         assert!(matches!(
@@ -501,7 +576,7 @@ mod tests {
             content: "Model message".to_string(),
         });
 
-        let input = context_to_input(&context);
+        let input = context_to_input(&context.items);
 
         assert_eq!(input.len(), 3);
         assert!(
@@ -575,11 +650,13 @@ mod tests {
             stream: None,
             reasoning: effort_to_reasoning(Effort::Auto),
             tools: None,
+            previous_response_id: None,
         };
 
         let json = serde_json::to_string(&request).unwrap();
         assert!(!json.contains("stream"));
         assert!(!json.contains("tools"));
+        assert!(!json.contains("previous_response_id"));
         assert!(json.contains(r#""enabled":true"#));
         assert!(!json.contains(r#""effort""#));
     }
@@ -592,6 +669,7 @@ mod tests {
             stream: Some(true),
             reasoning: effort_to_reasoning(Effort::Medium),
             tools: None,
+            previous_response_id: None,
         };
 
         let json = serde_json::to_string(&request).unwrap();
@@ -630,5 +708,65 @@ mod tests {
         }
         let provider = LmStudioProvider::new(None);
         assert_eq!(provider.base_url, "http://localhost:1234/v1");
+    }
+
+    #[test]
+    fn test_context_to_input_with_partial_slice() {
+        let mut context = Context::new();
+        // System directive is items[0]
+        context.add(ContextSegment {
+            source: Source::User,
+            content: "Turn 1".to_string(),
+        });
+        context.add(ContextSegment {
+            source: Source::Model,
+            content: "Response 1".to_string(),
+        });
+        // Watermark = 3 (system + user + model)
+        context.add(ContextSegment {
+            source: Source::User,
+            content: "Turn 2".to_string(),
+        });
+
+        // Partial slice: only the new user message
+        let partial = context_to_input(&context.items[3..]);
+        assert_eq!(partial.len(), 1);
+        assert!(
+            matches!(&partial[0], InputItem::Message { role: Role::User, content } if content == "Turn 2")
+        );
+
+        // Full slice: all items
+        let full = context_to_input(&context.items[..]);
+        assert_eq!(full.len(), 4); // system + user + model + user
+    }
+
+    #[test]
+    fn test_responses_request_previous_response_id_present() {
+        let request = ResponsesRequest {
+            model: "test".to_string(),
+            input: vec![],
+            stream: Some(true),
+            reasoning: effort_to_reasoning(Effort::Auto),
+            tools: None,
+            previous_response_id: Some("resp_abc123".to_string()),
+        };
+
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains(r#""previous_response_id":"resp_abc123""#));
+    }
+
+    #[test]
+    fn test_responses_request_previous_response_id_omitted_when_none() {
+        let request = ResponsesRequest {
+            model: "test".to_string(),
+            input: vec![],
+            stream: Some(true),
+            reasoning: effort_to_reasoning(Effort::Auto),
+            tools: None,
+            previous_response_id: None,
+        };
+
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(!json.contains("previous_response_id"));
     }
 }

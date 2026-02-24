@@ -377,6 +377,8 @@ fn spawn_request(app: &App, tx: mpsc::Sender<Action>) {
     let model = app.model_name.clone();
     let effort = app.effort;
     let tools = app.tool_definitions();
+    let previous_response_id = app.last_response_id.clone();
+    let context_watermark = app.context_watermark;
 
     // Async channel for streaming chunks
     let (chunk_tx, mut chunk_rx) = tokio::sync::mpsc::channel::<StreamChunk>(100);
@@ -391,6 +393,8 @@ fn spawn_request(app: &App, tx: mpsc::Sender<Action>) {
             model: &model,
             effort,
             tools: &tools,
+            previous_response_id: previous_response_id.as_deref(),
+            context_watermark,
         };
 
         if let Err(e) = provider.stream_completion(request, chunk_tx).await {
@@ -411,6 +415,7 @@ fn spawn_request(app: &App, tx: mpsc::Sender<Action>) {
     tokio::spawn(async move {
         let mut forwarded_count = 0usize;
         let mut total_content_len = 0usize;
+        let mut completed_response_id: Option<String> = None;
 
         while let Some(chunk) = chunk_rx.recv().await {
             forwarded_count += 1;
@@ -441,14 +446,23 @@ fn spawn_request(app: &App, tx: mpsc::Sender<Action>) {
                         return;
                     }
                 }
+                StreamChunk::Completed { response_id } => {
+                    debug!("Stream completed with response_id={:?}", response_id);
+                    completed_response_id = response_id;
+                }
             }
         }
 
         info!(
-            "Forwarding complete: {} actions, {} content bytes",
-            forwarded_count, total_content_len
+            "Forwarding complete: {} actions, {} content bytes, response_id={:?}",
+            forwarded_count, total_content_len, completed_response_id
         );
-        if tx.send(Action::ResponseDone).is_err() {
+        if tx
+            .send(Action::ResponseDone {
+                response_id: completed_response_id,
+            })
+            .is_err()
+        {
             warn!("Failed to send ResponseDone: receiver dropped");
         }
     });

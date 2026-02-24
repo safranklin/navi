@@ -5,7 +5,7 @@ use navi::inference::{
 use tokio::sync::mpsc;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
-    matchers::{method, path},
+    matchers::{body_string_contains, method, path},
 };
 
 // ============================================================================
@@ -22,20 +22,31 @@ fn create_test_context() -> Context {
     context
 }
 
-/// Collects all chunks from a stream into vectors
-async fn collect_chunks(mut receiver: mpsc::Receiver<StreamChunk>) -> (Vec<String>, Vec<String>) {
-    let mut content_chunks = Vec::new();
-    let mut thinking_chunks = Vec::new();
+/// Collected stream results including response_id from Completed chunk
+struct CollectedStream {
+    content: Vec<String>,
+    thinking: Vec<String>,
+    response_id: Option<String>,
+}
+
+/// Collects all chunks from a stream
+async fn collect_chunks(mut receiver: mpsc::Receiver<StreamChunk>) -> CollectedStream {
+    let mut result = CollectedStream {
+        content: Vec::new(),
+        thinking: Vec::new(),
+        response_id: None,
+    };
 
     while let Some(chunk) = receiver.recv().await {
         match chunk {
-            StreamChunk::Content { text, .. } => content_chunks.push(text),
-            StreamChunk::Thinking { text, .. } => thinking_chunks.push(text),
-            StreamChunk::ToolCall(_) => {} // Collected separately when testing tool calls
+            StreamChunk::Content { text, .. } => result.content.push(text),
+            StreamChunk::Thinking { text, .. } => result.thinking.push(text),
+            StreamChunk::Completed { response_id } => result.response_id = response_id,
+            StreamChunk::ToolCall(_) => {}
         }
     }
 
-    (content_chunks, thinking_chunks)
+    result
 }
 
 // ============================================================================
@@ -58,7 +69,7 @@ event: response.output_text.delta
 data: {\"type\":\"response.output_text.delta\",\"delta\":\" world\"}
 
 event: response.completed
-data: {\"type\":\"response.completed\"}
+data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_or_001\"}}
 ";
 
     Mock::given(method("POST"))
@@ -75,6 +86,8 @@ data: {\"type\":\"response.completed\"}
         context: &context,
         effort: Effort::None,
         tools: &[],
+        previous_response_id: None,
+        context_watermark: 0,
     };
 
     let (tx, rx) = mpsc::channel(100);
@@ -82,9 +95,10 @@ data: {\"type\":\"response.completed\"}
 
     assert!(result.is_ok());
 
-    let (content, thinking) = collect_chunks(rx).await;
-    assert_eq!(content, vec!["Hello", " world"]);
-    assert!(thinking.is_empty());
+    let collected = collect_chunks(rx).await;
+    assert_eq!(collected.content, vec!["Hello", " world"]);
+    assert!(collected.thinking.is_empty());
+    assert_eq!(collected.response_id.as_deref(), Some("resp_or_001"));
 }
 
 #[tokio::test]
@@ -120,6 +134,8 @@ data: {\"type\":\"response.completed\"}
         context: &context,
         effort: Effort::High,
         tools: &[],
+        previous_response_id: None,
+        context_watermark: 0,
     };
 
     let (tx, rx) = mpsc::channel(100);
@@ -127,9 +143,9 @@ data: {\"type\":\"response.completed\"}
 
     assert!(result.is_ok());
 
-    let (content, thinking) = collect_chunks(rx).await;
-    assert_eq!(content, vec!["Answer"]);
-    assert_eq!(thinking, vec!["Thinking..."]);
+    let collected = collect_chunks(rx).await;
+    assert_eq!(collected.content, vec!["Answer"]);
+    assert_eq!(collected.thinking, vec!["Thinking..."]);
 }
 
 #[tokio::test]
@@ -150,6 +166,8 @@ async fn test_openrouter_api_error_response() {
         context: &context,
         effort: Effort::None,
         tools: &[],
+        previous_response_id: None,
+        context_watermark: 0,
     };
 
     let (tx, _rx) = mpsc::channel(100);
@@ -187,6 +205,8 @@ data: {\"type\":\"response.output_text.delta\",\"delta\":\" world\"}
         context: &context,
         effort: Effort::None,
         tools: &[],
+        previous_response_id: None,
+        context_watermark: 0,
     };
 
     let (tx, rx) = mpsc::channel(1);
@@ -218,7 +238,7 @@ event: response.output_text.delta
 data: {\"delta\":\" LM Studio\"}
 
 event: response.completed
-data: {\"id\":\"test\"}
+data: {\"response\":{\"id\":\"resp_lms_001\"}}
 ";
 
     Mock::given(method("POST"))
@@ -235,6 +255,8 @@ data: {\"id\":\"test\"}
         context: &context,
         effort: Effort::None,
         tools: &[],
+        previous_response_id: None,
+        context_watermark: 0,
     };
 
     let (tx, rx) = mpsc::channel(100);
@@ -242,9 +264,10 @@ data: {\"id\":\"test\"}
 
     assert!(result.is_ok());
 
-    let (content, thinking) = collect_chunks(rx).await;
-    assert_eq!(content, vec!["Hello", " LM Studio"]);
-    assert!(thinking.is_empty());
+    let collected = collect_chunks(rx).await;
+    assert_eq!(collected.content, vec!["Hello", " LM Studio"]);
+    assert!(collected.thinking.is_empty());
+    assert_eq!(collected.response_id.as_deref(), Some("resp_lms_001"));
 }
 
 #[tokio::test]
@@ -277,6 +300,8 @@ data: {\"id\":\"test\"}
         context: &context,
         effort: Effort::Medium,
         tools: &[],
+        previous_response_id: None,
+        context_watermark: 0,
     };
 
     let (tx, rx) = mpsc::channel(100);
@@ -284,9 +309,9 @@ data: {\"id\":\"test\"}
 
     assert!(result.is_ok());
 
-    let (content, thinking) = collect_chunks(rx).await;
-    assert_eq!(content, vec!["Response"]);
-    assert_eq!(thinking, vec!["Let me think..."]);
+    let collected = collect_chunks(rx).await;
+    assert_eq!(collected.content, vec!["Response"]);
+    assert_eq!(collected.thinking, vec!["Let me think..."]);
 }
 
 #[tokio::test]
@@ -325,6 +350,8 @@ data: {\"id\":\"test\"}
         context: &context,
         effort: Effort::None,
         tools: &[],
+        previous_response_id: None,
+        context_watermark: 0,
     };
 
     let (tx, rx) = mpsc::channel(100);
@@ -332,10 +359,10 @@ data: {\"id\":\"test\"}
 
     assert!(result.is_ok());
 
-    let (content, thinking) = collect_chunks(rx).await;
+    let collected = collect_chunks(rx).await;
     // Should only receive the text chunk, ignoring unknown events
-    assert_eq!(content, vec!["Text"]);
-    assert!(thinking.is_empty());
+    assert_eq!(collected.content, vec!["Text"]);
+    assert!(collected.thinking.is_empty());
 }
 
 // ============================================================================
@@ -371,10 +398,164 @@ async fn test_effort_levels_affect_request() {
             context: &context,
             effort,
             tools: &[],
+            previous_response_id: None,
+            context_watermark: 0,
         };
 
         let (tx, _rx) = mpsc::channel(100);
         let result = provider.stream_completion(request, tx).await;
         assert!(result.is_ok(), "Failed for effort level: {:?}", effort);
     }
+}
+
+// ============================================================================
+// Prompt Caching Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_lmstudio_response_id_none_when_missing_from_completed() {
+    let mock_server = MockServer::start().await;
+
+    // response.completed without response.id — should yield None
+    let sse_response = "\
+event: response.output_text.delta
+data: {\"delta\":\"Hi\"}
+
+event: response.completed
+data: {\"status\":\"done\"}
+";
+
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(sse_response))
+        .mount(&mock_server)
+        .await;
+
+    let provider = LmStudioProvider::new(Some(mock_server.uri()));
+    let context = create_test_context();
+    let request = CompletionRequest {
+        model: "test-model",
+        context: &context,
+        effort: Effort::None,
+        tools: &[],
+        previous_response_id: None,
+        context_watermark: 0,
+    };
+
+    let (tx, rx) = mpsc::channel(100);
+    let result = provider.stream_completion(request, tx).await;
+    assert!(result.is_ok());
+
+    let collected = collect_chunks(rx).await;
+    assert_eq!(collected.content, vec!["Hi"]);
+    assert!(collected.response_id.is_none(), "Expected None when response.id missing");
+}
+
+#[tokio::test]
+async fn test_lmstudio_sends_previous_response_id_in_request() {
+    let mock_server = MockServer::start().await;
+
+    let sse_response = "\
+event: response.completed
+data: {\"response\":{\"id\":\"resp_round2\"}}
+";
+
+    // Match: request body contains previous_response_id
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .and(body_string_contains("previous_response_id"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(sse_response))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    let provider = LmStudioProvider::new(Some(mock_server.uri()));
+
+    // Build a context with items past the watermark
+    let mut context = Context::new();
+    context.add(ContextSegment {
+        source: Source::User,
+        content: "Turn 1".to_string(),
+    });
+    context.add(ContextSegment {
+        source: Source::Model,
+        content: "Response 1".to_string(),
+    });
+    // Watermark at 3 (system + user + model)
+    context.add(ContextSegment {
+        source: Source::User,
+        content: "Turn 2".to_string(),
+    });
+
+    let request = CompletionRequest {
+        model: "test-model",
+        context: &context,
+        effort: Effort::None,
+        tools: &[],
+        previous_response_id: Some("resp_round1"),
+        context_watermark: 3,
+    };
+
+    let (tx, rx) = mpsc::channel(100);
+    let result = provider.stream_completion(request, tx).await;
+    assert!(result.is_ok());
+
+    let collected = collect_chunks(rx).await;
+    assert_eq!(collected.response_id.as_deref(), Some("resp_round2"));
+}
+
+#[tokio::test]
+async fn test_lmstudio_fallback_on_400_retries_without_previous_response_id() {
+    let mock_server = MockServer::start().await;
+
+    let success_sse = "\
+event: response.output_text.delta
+data: {\"delta\":\"Recovered\"}
+
+event: response.completed
+data: {\"response\":{\"id\":\"resp_fresh\"}}
+";
+
+    // First request has previous_response_id → return 400
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .and(body_string_contains("previous_response_id"))
+        .respond_with(ResponseTemplate::new(400).set_body_string("cache miss"))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    // Retry without previous_response_id → return 200
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(success_sse))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    let provider = LmStudioProvider::new(Some(mock_server.uri()));
+
+    let mut context = Context::new();
+    context.add(ContextSegment {
+        source: Source::User,
+        content: "Hello".to_string(),
+    });
+
+    let request = CompletionRequest {
+        model: "test-model",
+        context: &context,
+        effort: Effort::None,
+        tools: &[],
+        previous_response_id: Some("resp_stale"),
+        context_watermark: 1,
+    };
+
+    let (tx, rx) = mpsc::channel(100);
+    let result = provider.stream_completion(request, tx).await;
+    assert!(result.is_ok());
+
+    let collected = collect_chunks(rx).await;
+    assert_eq!(collected.content, vec!["Recovered"]);
+    // Self-healed: fresh response_id from the retry
+    assert_eq!(collected.response_id.as_deref(), Some("resp_fresh"));
 }
