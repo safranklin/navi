@@ -72,17 +72,43 @@ Controls how much the model reasons before responding. Cycle with `Ctrl+R`:
 
 ## Controls
 
+Navi uses a modal input system: **Input mode** (default) for typing, and **Cursor mode** for navigating messages.
+
+### Input Mode
+
 | Key | Action |
 |-----|--------|
 | `Enter` | Send message |
-| `Ctrl+J` | Insert newline |
-| `Esc` | Quit |
-| `←` `→` `↑` `↓` | Move cursor |
+| `Shift+Enter` / `Ctrl+J` | Insert newline |
+| `Esc` | Switch to Cursor mode |
+| `Ctrl+C` | Quit |
+| `←` `→` `↑` `↓` | Move cursor in input |
 | `Home` / `End` | Jump to start/end of line |
+| `Ctrl+A` / `Ctrl+E` | Start/end of line (Emacs) |
+| `Alt+←` / `Alt+→` | Move by word |
 | `Backspace` / `Delete` | Delete characters |
+| `Ctrl+W` / `Alt+Backspace` | Delete word backward |
+| `Alt+D` | Delete word forward |
+| `Ctrl+U` | Kill to line start |
+| `Ctrl+K` | Kill to line end |
+| `Ctrl+Y` | Yank (paste from kill ring) |
 | `Ctrl+R` | Cycle reasoning effort |
+
+### Cursor Mode
+
+| Key | Action |
+|-----|--------|
+| `↑` / `↓` | Navigate messages |
+| `Enter` or typing | Switch back to Input mode |
+| `Ctrl+C` | Quit |
+
+### Always Active
+
+| Key | Action |
+|-----|--------|
 | `Page Up` / `Page Down` | Scroll messages |
 | `Mouse wheel` | Scroll messages |
+| `Ctrl+R` | Cycle reasoning effort |
 
 Bracketed paste is supported — paste multi-line text and newlines are preserved.
 
@@ -94,7 +120,10 @@ src/
 ├── lib.rs                        # Library root, Provider enum
 ├── core/                         # Pure business logic (no I/O)
 │   ├── state.rs                  # App state
-│   └── action.rs                 # Action enum + update() reducer
+│   ├── action.rs                 # Action enum + update() reducer
+│   └── tools/                    # Tool system
+│       ├── mod.rs                # Tool trait, registry, type erasure
+│       └── arithmetic.rs         # Add, subtract, multiply, divide
 ├── inference/                    # LLM provider integrations
 │   ├── types.rs                  # Domain types (Context, Source, Effort, StreamChunk)
 │   ├── provider.rs               # CompletionProvider trait

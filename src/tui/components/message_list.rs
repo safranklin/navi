@@ -173,32 +173,33 @@ impl<'a> Component for MessageList<'a> {
         // Show loading indicator for the entire duration of model response
         let show_spinner = self.is_loading && self.state.stick_to_bottom;
 
-        // When loading, reduce scroll area so the logo gets guaranteed space.
-        // Only needed when messages fill/overflow the viewport — otherwise
-        // the empty viewport space below messages is naturally available.
-        let logo_height = Logo::required_height();
-        let scroll_area = if show_spinner && total_height >= area.height {
-            let reserved = logo_height.min(area.height / 2);
-            Rect {
-                height: area.height.saturating_sub(reserved),
-                ..area
-            }
+        // When loading, add bottom padding to the canvas so scroll_to_bottom
+        // pushes messages up, leaving screen space for the logo overlay.
+        // The ScrollView always fills the full viewport — no area reduction.
+        let logo_padding = if show_spinner {
+            5u16.min(area.height / 2)
         } else {
-            area
+            0
         };
+        let canvas_height = total_height + logo_padding;
 
-        // 2. Clamp scroll offset to prevent overscrolling past content
-        self.state.viewport_height = scroll_area.height;
-        self.state.clamp_scroll();
+        // 2. Clamp scroll offset to prevent overscrolling past content.
+        // Skip when auto-scrolling: scroll_to_bottom targets canvas_height
+        // (which includes logo padding), while clamp uses content height only.
+        self.state.viewport_height = area.height;
+        if !self.state.stick_to_bottom {
+            self.state.clamp_scroll();
+        }
 
         let scroll_offset = self.state.scroll_state.offset().y;
         let visible_range = self
             .state
             .layout
-            .visible_range(scroll_offset, scroll_area.height);
+            .visible_range(scroll_offset, area.height);
 
         // 3. Render visible segments into a ScrollView
-        let mut scroll_view = ScrollView::new(Size::new(content_width, total_height))
+        // Canvas includes logo padding so scroll_to_bottom leaves room for the overlay.
+        let mut scroll_view = ScrollView::new(Size::new(content_width, canvas_height))
             .vertical_scrollbar_visibility(ScrollbarVisibility::Always)
             .horizontal_scrollbar_visibility(ScrollbarVisibility::Never);
 
@@ -251,15 +252,19 @@ impl<'a> Component for MessageList<'a> {
             self.state.scroll_state.scroll_to_bottom();
         }
 
-        // Render the ScrollView into the (possibly reduced) scroll area
-        frame.render_stateful_widget(scroll_view, scroll_area, &mut self.state.scroll_state);
+        // Render the ScrollView into the full viewport area
+        frame.render_stateful_widget(scroll_view, area, &mut self.state.scroll_state);
 
-        // 4. Render animated logo centered in all empty space below messages
+        // 4. Render animated logo centered in empty space below messages
         if show_spinner {
-            let content_visible_h = total_height.min(scroll_area.height);
-            let logo_start = scroll_area.y + content_visible_h;
-            let logo_h = (area.y + area.height).saturating_sub(logo_start);
-            if logo_h > 0 {
+            // Calculate where messages end on screen (accounting for scroll)
+            let content_screen_end = total_height.saturating_sub(scroll_offset);
+            let logo_start = area.y + content_screen_end.min(area.height);
+            let bottom_pad: u16 = 2;
+            let logo_h = (area.y + area.height)
+                .saturating_sub(logo_start)
+                .saturating_sub(bottom_pad);
+            if logo_h >= 3 {
                 let logo_area = Rect::new(area.x, logo_start, area.width, logo_h);
                 Logo::render(frame, logo_area, self.spinner_frame);
             }

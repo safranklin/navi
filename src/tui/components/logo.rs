@@ -34,23 +34,27 @@ impl Logo {
         let logo_cols = (LOGO_WIDTH / 2.0).ceil() as u16;
         let canvas_width = logo_cols + 2;
 
-        // Vertical Layout to center it within the given area (if larger)
-        // Or we just consume the area?
-        // Let's assume the caller handles general positioning, but we enforce sizing.
-        // Actually, the previous logic in LandingPage handled vertical centering of the *group* (fairy + text).
-        // Here, we just want to render the Fairy in the provided area, but ensuring we don't stretch.
+        // Scale both dimensions uniformly to fit within `area` while preserving aspect ratio.
+        // Use the tighter constraint (height or width) so the sprite never distorts.
+        let scale_h = area.height as f32 / canvas_height as f32;
+        let scale_w = area.width as f32 / canvas_width as f32;
+        let scale = scale_h.min(scale_w).min(1.0); // never upscale
 
-        // We really want to render exactly at our desired size, centered in `area`.
+        let actual_height = (canvas_height as f32 * scale).floor() as u16;
+        let actual_width = (canvas_width as f32 * scale).floor() as u16;
 
-        let vertical_layout = Layout::vertical([Constraint::Length(canvas_height)])
+        let vertical_layout = Layout::vertical([Constraint::Length(actual_height)])
             .flex(Flex::Center)
             .split(area);
 
-        let horizontal_layout = Layout::horizontal([Constraint::Length(canvas_width)])
+        let horizontal_layout = Layout::horizontal([Constraint::Length(actual_width)])
             .flex(Flex::Center)
             .split(vertical_layout[0]);
 
         // --- Render Canvas (Fairy) ---
+        // Coordinate space stays at ideal size — the Canvas widget maps
+        // logical coordinates to the physical rect, so all dots stay in bounds
+        // even when the rendered area is smaller.
         let canvas_max_x = (canvas_width as f64) * 2.0;
         let canvas_max_y = (canvas_height as f64) * 4.0;
 

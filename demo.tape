@@ -11,28 +11,23 @@ Set Padding 20
 Set TypingSpeed 75ms
 Set Theme "Catppuccin Mocha"
 
-# Pre-build off-camera
-Hide
-Type "cargo build --release 2>/dev/null"
-Enter
-Sleep 30s
-Type "clear"
-Enter
-Sleep 500ms
-Show
-
-# Start navi
+# Start navi (builds on first run if needed)
 Type "cargo run --release"
 Enter
-Sleep 3s
 
-# --- Scene 1: Hello World ---
-Type "Hello World!"
+# Wait for the app to fully start
+Wait+Screen@120s /Welcome to Navi/
+Sleep 1s
+
+# --- Scene 1: Tool use with chained arithmetic ---
+# This triggers add → multiply → divide tool calls
+Type "What is ((3+3) * 5) / 2?"
 Sleep 500ms
 Enter
 
-# Wait for the response to finish streaming
-Sleep 8s
+# Wait for "Response complete." in the title bar
+Wait+Screen@30s /Response complete/
+Sleep 3s
 
 # --- Scene 2: Cycle reasoning to High ---
 # Auto → Low → Medium → High (3 presses)
@@ -43,17 +38,15 @@ Sleep 500ms
 Ctrl+R
 Sleep 1s
 
-# --- Scene 3: Math question that triggers reasoning ---
-Type "Prove that the integral of e^(-x^2) from -inf to inf equals sqrt(pi)."
+# --- Scene 3: Reasoning question (with High effort) ---
+Type "Could you have computed that in fewer tool calls? What's the minimum?"
 Sleep 500ms
 Enter
 
-# Wait for reasoning + response to complete (Gaussian integral proof is heavy)
-Sleep 30s
-
-# Pause to admire the result
+# Wait for "Response complete." in the title bar
+Wait+Screen@60s /Response complete/
 Sleep 3s
 
 # Exit
-Escape
+Ctrl+C
 Sleep 1s
