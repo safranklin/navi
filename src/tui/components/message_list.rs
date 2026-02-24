@@ -24,6 +24,7 @@ use tui_scrollview::{ScrollView, ScrollViewState, ScrollbarVisibility};
 
 use crate::inference::{Context, Source};
 use crate::tui::component::{Component, EventHandler};
+use crate::tui::components::logo::Logo;
 use crate::tui::components::message::Message;
 use crate::tui::components::tool_message::{ToolMessage, ToolMessageKind};
 use crate::tui::event::TuiEvent;
@@ -103,6 +104,7 @@ pub struct MessageList<'a> {
     pub context: &'a Context,
     pub is_loading: bool,
     pub pulse_value: f32,
+    pub spinner_frame: usize,
 }
 
 impl<'a> MessageList<'a> {
@@ -111,26 +113,14 @@ impl<'a> MessageList<'a> {
         context: &'a Context,
         is_loading: bool,
         pulse_value: f32,
+        spinner_frame: usize,
     ) -> Self {
         Self {
             state,
             context,
             is_loading,
             pulse_value,
-        }
-    }
-
-    /// Build the ghost "preparing" segment shown while waiting for first token.
-    /// Dot count breathes with pulse_value (sine wave): . → .. → ... → .. → .
-    fn ghost_segment(&self) -> crate::inference::ContextSegment {
-        let dots = match self.pulse_value {
-            v if v > 0.66 => "...",
-            v if v > 0.33 => "..",
-            _ => ".",
-        };
-        crate::inference::ContextSegment {
-            source: Source::Status,
-            content: format!("Preparing{dots}"),
+            spinner_frame,
         }
     }
 }
@@ -178,29 +168,36 @@ impl<'a> Component for MessageList<'a> {
         layout.rebuild_prefix_heights();
         layout.update_metadata(num_items, content_width);
 
-        let mut total_height: u16 = self.state.layout.heights.iter().sum();
+        let total_height: u16 = self.state.layout.heights.iter().sum();
 
-        // Pre-compute ghost loader state (used for both total_height and rendering)
-        let ghost = if self.is_loading && self.context.items.last().is_some_and(|last| {
-            matches!(last, crate::inference::ContextItem::Message(seg) if matches!(seg.source, Source::User | Source::Directive))
-        }) {
-            let seg = self.ghost_segment();
-            let height = Message::calculate_height(&seg, content_width);
-            total_height += height;
-            Some((seg, height))
+        // Show loading indicator for the entire duration of model response
+        let show_spinner = self.is_loading && self.state.stick_to_bottom;
+
+        // When loading, reduce scroll area so the logo gets guaranteed space.
+        // Only needed when messages fill/overflow the viewport — otherwise
+        // the empty viewport space below messages is naturally available.
+        let logo_height = Logo::required_height();
+        let scroll_area = if show_spinner && total_height >= area.height {
+            let reserved = logo_height.min(area.height / 2);
+            Rect {
+                height: area.height.saturating_sub(reserved),
+                ..area
+            }
         } else {
-            None
+            area
         };
 
         // 2. Clamp scroll offset to prevent overscrolling past content
-        self.state.viewport_height = area.height;
+        self.state.viewport_height = scroll_area.height;
         self.state.clamp_scroll();
 
         let scroll_offset = self.state.scroll_state.offset().y;
-        let visible_range = self.state.layout.visible_range(scroll_offset, area.height);
+        let visible_range = self
+            .state
+            .layout
+            .visible_range(scroll_offset, scroll_area.height);
 
-        // 3. Render visible segments
-        // We render into a ScrollView widget.
+        // 3. Render visible segments into a ScrollView
         let mut scroll_view = ScrollView::new(Size::new(content_width, total_height))
             .vertical_scrollbar_visibility(ScrollbarVisibility::Always)
             .horizontal_scrollbar_visibility(ScrollbarVisibility::Never);
@@ -249,24 +246,24 @@ impl<'a> Component for MessageList<'a> {
             y_offset += height;
         }
 
-        // 4. Render Ghost "Thinking..." Indicator if needed
-        if let Some((ghost_seg, ghost_height)) = &ghost {
-            let viewport_bottom = scroll_offset + area.height;
-            if y_offset < viewport_bottom {
-                let message = Message::new(ghost_seg, false, self.pulse_value);
-                let segment_rect = Rect::new(0, y_offset, content_width, *ghost_height);
-                scroll_view.render_widget(message, segment_rect);
-            }
-        }
-
         // Auto-scroll logic (Mutation)
         if self.state.stick_to_bottom {
             self.state.scroll_state.scroll_to_bottom();
         }
 
-        // Render the ScrollView itself
-        // This requires &mut scroll_state, which we can validly borrow from &mut self.state
-        frame.render_stateful_widget(scroll_view, area, &mut self.state.scroll_state);
+        // Render the ScrollView into the (possibly reduced) scroll area
+        frame.render_stateful_widget(scroll_view, scroll_area, &mut self.state.scroll_state);
+
+        // 4. Render animated logo centered in all empty space below messages
+        if show_spinner {
+            let content_visible_h = total_height.min(scroll_area.height);
+            let logo_start = scroll_area.y + content_visible_h;
+            let logo_h = (area.y + area.height).saturating_sub(logo_start);
+            if logo_h > 0 {
+                let logo_area = Rect::new(area.x, logo_start, area.width, logo_h);
+                Logo::render(frame, logo_area, self.spinner_frame);
+            }
+        }
 
         // Update auxiliary state
         let current_offset = self.state.scroll_state.offset().y;
