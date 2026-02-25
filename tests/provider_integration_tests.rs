@@ -5,7 +5,7 @@ use navi::inference::{
 use tokio::sync::mpsc;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
-    matchers::{body_string_contains, method, path},
+    matchers::{method, path},
 };
 
 // ============================================================================
@@ -267,7 +267,8 @@ data: {\"response\":{\"id\":\"resp_lms_001\"}}
     let collected = collect_chunks(rx).await;
     assert_eq!(collected.content, vec!["Hello", " LM Studio"]);
     assert!(collected.thinking.is_empty());
-    assert_eq!(collected.response_id.as_deref(), Some("resp_lms_001"));
+    // LM Studio never propagates response_id (no previous_response_id support)
+    assert!(collected.response_id.is_none());
 }
 
 #[tokio::test]
@@ -451,111 +452,5 @@ data: {\"status\":\"done\"}
     assert!(collected.response_id.is_none(), "Expected None when response.id missing");
 }
 
-#[tokio::test]
-async fn test_lmstudio_sends_previous_response_id_in_request() {
-    let mock_server = MockServer::start().await;
-
-    let sse_response = "\
-event: response.completed
-data: {\"response\":{\"id\":\"resp_round2\"}}
-";
-
-    // Match: request body contains previous_response_id
-    Mock::given(method("POST"))
-        .and(path("/responses"))
-        .and(body_string_contains("previous_response_id"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(sse_response))
-        .expect(1)
-        .mount(&mock_server)
-        .await;
-
-    let provider = LmStudioProvider::new(Some(mock_server.uri()));
-
-    // Build a context with items past the watermark
-    let mut context = Context::new();
-    context.add(ContextSegment {
-        source: Source::User,
-        content: "Turn 1".to_string(),
-    });
-    context.add(ContextSegment {
-        source: Source::Model,
-        content: "Response 1".to_string(),
-    });
-    // Watermark at 3 (system + user + model)
-    context.add(ContextSegment {
-        source: Source::User,
-        content: "Turn 2".to_string(),
-    });
-
-    let request = CompletionRequest {
-        model: "test-model",
-        context: &context,
-        effort: Effort::None,
-        tools: &[],
-        previous_response_id: Some("resp_round1"),
-        context_watermark: 3,
-    };
-
-    let (tx, rx) = mpsc::channel(100);
-    let result = provider.stream_completion(request, tx).await;
-    assert!(result.is_ok());
-
-    let collected = collect_chunks(rx).await;
-    assert_eq!(collected.response_id.as_deref(), Some("resp_round2"));
-}
-
-#[tokio::test]
-async fn test_lmstudio_fallback_on_400_retries_without_previous_response_id() {
-    let mock_server = MockServer::start().await;
-
-    let success_sse = "\
-event: response.output_text.delta
-data: {\"delta\":\"Recovered\"}
-
-event: response.completed
-data: {\"response\":{\"id\":\"resp_fresh\"}}
-";
-
-    // First request has previous_response_id → return 400
-    Mock::given(method("POST"))
-        .and(path("/responses"))
-        .and(body_string_contains("previous_response_id"))
-        .respond_with(ResponseTemplate::new(400).set_body_string("cache miss"))
-        .expect(1)
-        .mount(&mock_server)
-        .await;
-
-    // Retry without previous_response_id → return 200
-    Mock::given(method("POST"))
-        .and(path("/responses"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(success_sse))
-        .expect(1)
-        .mount(&mock_server)
-        .await;
-
-    let provider = LmStudioProvider::new(Some(mock_server.uri()));
-
-    let mut context = Context::new();
-    context.add(ContextSegment {
-        source: Source::User,
-        content: "Hello".to_string(),
-    });
-
-    let request = CompletionRequest {
-        model: "test-model",
-        context: &context,
-        effort: Effort::None,
-        tools: &[],
-        previous_response_id: Some("resp_stale"),
-        context_watermark: 1,
-    };
-
-    let (tx, rx) = mpsc::channel(100);
-    let result = provider.stream_completion(request, tx).await;
-    assert!(result.is_ok());
-
-    let collected = collect_chunks(rx).await;
-    assert_eq!(collected.content, vec!["Recovered"]);
-    // Self-healed: fresh response_id from the retry
-    assert_eq!(collected.response_id.as_deref(), Some("resp_fresh"));
-}
+// Note: previous_response_id and 400-fallback tests removed — LM Studio
+// provider no longer uses server-side prompt caching. See lmstudio.rs docs.

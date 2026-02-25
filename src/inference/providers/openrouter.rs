@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::Sender;
 
 use crate::inference::{
-    CompletionProvider, CompletionRequest, Context, ContextItem, Effort, ProviderError, Source,
-    StreamChunk, ToolDefinition,
+    CompletionProvider, CompletionRequest, ContextItem, Effort, ProviderError, Source, StreamChunk,
+    ToolDefinition,
 };
 
 // ============================================================================
@@ -81,6 +81,8 @@ struct ResponsesRequest {
     reasoning: Reasoning,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<ApiToolDefinition>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    previous_response_id: Option<String>,
 }
 
 /// Generic SSE event wrapper to extract the type field
@@ -145,14 +147,14 @@ struct PendingToolCall {
 // Translation Layer
 // ============================================================================
 
-/// Converts Navi's Context into Responses API input format.
+/// Converts context items into Responses API input format.
 ///
+/// Accepts a slice of ContextItems (full or partial) to support prompt caching.
 /// Produces a polymorphic input array: messages, function calls, and function call outputs.
 /// Filters out Thinking segments (reasoning is model-generated, not input).
-fn context_to_input(context: &Context) -> Vec<InputItem> {
+fn context_to_input(items: &[ContextItem]) -> Vec<InputItem> {
     let mut fco_counter = 0usize;
-    context
-        .items
+    items
         .iter()
         .filter_map(|item| match item {
             ContextItem::Message(seg) => match seg.source {
@@ -248,40 +250,16 @@ impl OpenRouterProvider {
             client: reqwest::Client::new(),
         }
     }
-}
 
-#[async_trait]
-impl CompletionProvider for OpenRouterProvider {
-    async fn stream_completion(
+    /// Sends a request to the Responses endpoint and returns the response.
+    async fn send_request(
         &self,
-        request: CompletionRequest<'_>,
-        sender: Sender<StreamChunk>,
-    ) -> Result<(), ProviderError> {
-        let reasoning = effort_to_reasoning(request.effort);
-
-        // Translate domain types to Responses API format
-        let input = context_to_input(request.context);
-
-        let responses_request = ResponsesRequest {
-            model: request.model.to_string(),
-            input,
-            stream: Some(true),
-            reasoning,
-            tools: tools_to_api(request.tools),
-        };
-
-        info!(
-            "OpenRouter Responses API request: model={}, input_count={}, effort={:?}",
-            request.model,
-            responses_request.input.len(),
-            request.effort
-        );
-
-        let json_body = serde_json::to_string(&responses_request)
+        request: &ResponsesRequest,
+    ) -> Result<reqwest::Response, ProviderError> {
+        let json_body = serde_json::to_string(request)
             .map_err(|e| ProviderError::Network(format!("Request serialization failed: {e}")))?;
         info!("Raw OpenRouter Request: {}", json_body);
 
-        // Make the API request to the Responses endpoint
         let response = self
             .client
             .post(format!("{}/responses", self.base_url))
@@ -306,6 +284,82 @@ impl CompletionProvider for OpenRouterProvider {
                 message: err_body,
             });
         }
+
+        Ok(response)
+    }
+}
+
+#[async_trait]
+impl CompletionProvider for OpenRouterProvider {
+    async fn stream_completion(
+        &self,
+        request: CompletionRequest<'_>,
+        sender: Sender<StreamChunk>,
+    ) -> Result<(), ProviderError> {
+        let reasoning = effort_to_reasoning(request.effort);
+
+        // Use prompt caching when we have a previous_response_id: send only
+        // new items and let the server reconstruct prior context.
+        let (input_items, prev_id) = if let Some(prev_response_id) = request.previous_response_id
+            && request.context_watermark > 0
+            && request.context_watermark <= request.context.items.len()
+        {
+            info!(
+                "Prompt caching: sending items[{}..] with previous_response_id",
+                request.context_watermark
+            );
+            (
+                &request.context.items[request.context_watermark..],
+                Some(prev_response_id.to_string()),
+            )
+        } else {
+            (&request.context.items[..], None)
+        };
+
+        let input = context_to_input(input_items);
+
+        let responses_request = ResponsesRequest {
+            model: request.model.to_string(),
+            input,
+            stream: Some(true),
+            reasoning,
+            tools: tools_to_api(request.tools),
+            previous_response_id: prev_id.clone(),
+        };
+
+        info!(
+            "OpenRouter Responses API request: model={}, input_count={}, effort={:?}, cached={}",
+            request.model,
+            responses_request.input.len(),
+            request.effort,
+            prev_id.is_some()
+        );
+
+        let response = self.send_request(&responses_request).await;
+
+        // Fallback: if we used previous_response_id and got 400, retry with full context
+        let response = match response {
+            Err(ProviderError::Api {
+                status: 400,
+                ref message,
+            }) if prev_id.is_some() => {
+                warn!(
+                    "Prompt cache miss (400): {}. Retrying with full context.",
+                    message
+                );
+                let full_input = context_to_input(&request.context.items[..]);
+                let fallback_request = ResponsesRequest {
+                    model: request.model.to_string(),
+                    input: full_input,
+                    stream: Some(true),
+                    reasoning: effort_to_reasoning(request.effort),
+                    tools: tools_to_api(request.tools),
+                    previous_response_id: None,
+                };
+                self.send_request(&fallback_request).await?
+            }
+            other => other?,
+        };
 
         // Process the SSE stream with typed events
         let mut buffer = String::new();
@@ -538,7 +592,7 @@ mod tests {
             content: "Response".to_string(),
         });
 
-        let input = context_to_input(&context);
+        let input = context_to_input(&context.items);
 
         // Should have 3 items: Directive (from Context::new), User, and Model
         // Thinking should be filtered out
@@ -576,7 +630,7 @@ mod tests {
             content: "Model message".to_string(),
         });
 
-        let input = context_to_input(&context);
+        let input = context_to_input(&context.items);
 
         assert_eq!(input.len(), 3);
         assert!(
@@ -636,11 +690,13 @@ mod tests {
             stream: None,
             reasoning: effort_to_reasoning(Effort::Auto),
             tools: None,
+            previous_response_id: None,
         };
 
         let json = serde_json::to_string(&request).unwrap();
         assert!(!json.contains("stream"));
         assert!(!json.contains("tools"));
+        assert!(!json.contains("previous_response_id"));
         assert!(json.contains(r#""enabled":true"#));
         assert!(!json.contains(r#""effort""#));
     }
@@ -653,6 +709,7 @@ mod tests {
             stream: Some(true),
             reasoning: effort_to_reasoning(Effort::High),
             tools: None,
+            previous_response_id: None,
         };
 
         let json = serde_json::to_string(&request).unwrap();
@@ -668,6 +725,7 @@ mod tests {
             stream: Some(true),
             reasoning: effort_to_reasoning(Effort::None),
             tools: None,
+            previous_response_id: None,
         };
 
         let json = serde_json::to_string(&request).unwrap();

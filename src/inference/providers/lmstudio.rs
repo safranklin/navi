@@ -1,9 +1,14 @@
 //! LM Studio provider implementation using the Responses API.
 //!
 //! LM Studio v0.3.29+ supports the /v1/responses endpoint with:
-//! - Stateful interactions via previous_response_id (we don't use this)
 //! - Reasoning support with effort parameter
 //! - Streaming with SSE events
+//!
+//! We deliberately avoid `previous_response_id` here. LM Studio's LCP
+//! (Longest Common Prefix) KV cache works best when the client sends the
+//! full conversation each turn — the stable prefix gets a near-perfect
+//! cache hit. Using `previous_response_id` causes server-side history
+//! reconstruction that shifts the token layout and tanks cache reuse.
 
 use async_trait::async_trait;
 use log::{debug, info, warn};
@@ -271,24 +276,11 @@ impl CompletionProvider for LmStudioProvider {
     ) -> Result<(), ProviderError> {
         let reasoning = effort_to_reasoning(request.effort);
 
-        // Determine if we can use prompt caching (partial input + previous_response_id)
-        let (input_items, prev_id) = if let Some(prev_response_id) = request.previous_response_id
-            && request.context_watermark > 0
-            && request.context_watermark <= request.context.items.len()
-        {
-            info!(
-                "Prompt caching: sending items[{}..] with previous_response_id",
-                request.context_watermark
-            );
-            (
-                &request.context.items[request.context_watermark..],
-                Some(prev_response_id.to_string()),
-            )
-        } else {
-            (&request.context.items[..], None)
-        };
-
-        let input = context_to_input(input_items);
+        // Always send full context — LM Studio's LCP (Longest Common Prefix)
+        // cache works best when the prompt prefix stays stable across turns.
+        // Using previous_response_id causes LM Studio to reconstruct history
+        // server-side, which shifts the token layout and tanks cache hit rates.
+        let input = context_to_input(&request.context.items);
 
         let responses_request = ResponsesRequest {
             model: request.model.to_string(),
@@ -296,42 +288,17 @@ impl CompletionProvider for LmStudioProvider {
             stream: Some(true),
             reasoning,
             tools: tools_to_api(request.tools),
-            previous_response_id: prev_id.clone(),
+            previous_response_id: None,
         };
 
         info!(
-            "LM Studio Responses API request: model={}, input_count={}, effort={:?}, cached={}",
+            "LM Studio Responses API request: model={}, input_count={}, effort={:?}",
             request.model,
             responses_request.input.len(),
             request.effort,
-            prev_id.is_some()
         );
 
-        let response = self.send_request(&responses_request).await;
-
-        // Fallback: if we used previous_response_id and got 400, retry with full context
-        let response = match response {
-            Err(ProviderError::Api {
-                status: 400,
-                ref message,
-            }) if prev_id.is_some() => {
-                warn!(
-                    "Prompt cache miss (400): {}. Retrying with full context.",
-                    message
-                );
-                let full_input = context_to_input(&request.context.items[..]);
-                let fallback_request = ResponsesRequest {
-                    model: request.model.to_string(),
-                    input: full_input,
-                    stream: Some(true),
-                    reasoning: effort_to_reasoning(request.effort),
-                    tools: tools_to_api(request.tools),
-                    previous_response_id: None,
-                };
-                self.send_request(&fallback_request).await?
-            }
-            other => other?,
-        };
+        let response = self.send_request(&responses_request).await?;
 
         // Process the SSE stream with typed events
         let mut buffer = String::new();
@@ -476,18 +443,16 @@ impl CompletionProvider for LmStudioProvider {
                             }
                         }
                         Some("response.completed") => {
-                            let response_id = serde_json::from_str::<serde_json::Value>(data)
-                                .ok()
-                                .and_then(|v| {
-                                    v.get("response")?.get("id")?.as_str().map(String::from)
-                                });
                             info!(
-                                "Stream complete: {} chunks, {} content bytes, response_id={:?}",
-                                chunk_count, total_content_len, response_id
+                                "Stream complete: {} chunks, {} content bytes",
+                                chunk_count, total_content_len
                             );
                             debug!("response.completed data: {}", data);
+                            // Don't propagate response_id — we never use
+                            // previous_response_id with LM Studio, so the core
+                            // shouldn't set a watermark for this provider.
                             if sender
-                                .send(StreamChunk::Completed { response_id })
+                                .send(StreamChunk::Completed { response_id: None })
                                 .await
                                 .is_err()
                             {
