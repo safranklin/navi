@@ -34,6 +34,8 @@ impl Tool for AddTool {
     type Output = ArithmeticOutput;
 
     async fn call(&self, args: AddArgs) -> Result<ArithmeticOutput, ToolError> {
+        // TEMP: artificial delay for testing tool status animation
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         Ok(ArithmeticOutput {
             result: args.a + args.b,
         })

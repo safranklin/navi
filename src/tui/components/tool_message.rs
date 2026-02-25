@@ -3,12 +3,17 @@
 //! Renders a tool call paired with its result as a single bordered block.
 //!
 //! **Collapsed** (not selected):
-//!   `╭─ ⚙ add ──────────────────╮`
+//!   `╭─ ◈ add ─────────────────────╮`
 //!   `│ a: 42, b: 8 → result: 50 │`
 //!   `╰───────────────────────────╯`
 //!
+//! **Pending** (tool executing, alternates ◇/⟐):
+//!   `╭─ ◇ add ─────────────────────╮`
+//!   `│ a: 42, b: 8 …              │`
+//!   `╰───────────────────────────╯`
+//!
 //! **Expanded** (selected, pretty-printed JSON capped at MAX_SECTION_LINES):
-//!   `╭─ ⚙ add ──────────────────╮`
+//!   `╭─ ◈ add ─────────────────────╮`
 //!   `│ ▸ input                   │`
 //!   `│   {                       │`
 //!   `│     "a": 42,              │`
@@ -67,6 +72,7 @@ pub struct ToolGroup<'a> {
     pub call: &'a ToolCall,
     pub result: Option<&'a ToolResult>,
     pub is_selected: bool,
+    pub spinner_frame: usize,
 }
 
 impl<'a> ToolGroup<'a> {
@@ -104,6 +110,21 @@ impl<'a> ToolGroup<'a> {
     }
 }
 
+impl<'a> ToolGroup<'a> {
+    /// Diamond icon reflecting tool execution state:
+    /// - Pending: alternates ◇/⟐ (~6Hz pulse from spinner_frame)
+    /// - Complete: ◈ (settled)
+    fn icon(&self) -> &'static str {
+        if self.result.is_some() {
+            "◈"
+        } else if self.spinner_frame % 6 < 3 {
+            "◇"
+        } else {
+            "⟐"
+        }
+    }
+}
+
 impl<'a> Widget for ToolGroup<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         if area.height == 0 || area.width == 0 {
@@ -122,7 +143,7 @@ impl<'a> ToolGroup<'a> {
     /// Bordered block with a single summary line using colored spans.
     /// Args in dim yellow, ` → ` separator gray, result in dim white.
     fn render_collapsed(self, area: Rect, buf: &mut Buffer) {
-        let title = format!("⚙ {}", self.call.name);
+        let title = format!("{} {}", self.icon(), self.call.name);
         let border_style = tool_style().add_modifier(Modifier::DIM);
 
         let block = Block::bordered()
@@ -181,7 +202,7 @@ impl<'a> ToolGroup<'a> {
 
     /// Bordered block with labeled sections and pretty-printed JSON.
     fn render_expanded(self, area: Rect, buf: &mut Buffer) {
-        let title = format!("⚙ {}", self.call.name);
+        let title = format!("{} {}", self.icon(), self.call.name);
         let border_style = tool_style();
 
         let block = Block::bordered()

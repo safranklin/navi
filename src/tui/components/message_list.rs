@@ -253,6 +253,7 @@ impl<'a> Component for MessageList<'a> {
                         call: tc,
                         result: paired_result,
                         is_selected,
+                        spinner_frame: self.spinner_frame,
                     };
                     scroll_view.render_widget(group, segment_rect);
                 }
