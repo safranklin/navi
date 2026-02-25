@@ -41,7 +41,8 @@ use crate::core::action::{Action, Effect, update};
 use crate::core::state::App;
 use crate::inference::Effort;
 use crate::inference::{
-    CompletionProvider, CompletionRequest, LmStudioProvider, OpenRouterProvider, StreamChunk,
+    CompletionProvider, CompletionRequest, ContextItem, LmStudioProvider, OpenRouterProvider,
+    StreamChunk,
 };
 use crate::tui::component::EventHandler;
 use crate::tui::components::{InputBox, InputEvent, MessageListState};
@@ -228,10 +229,17 @@ pub fn run(provider_choice: Provider) -> std::io::Result<()> {
                     // Esc → switch to Cursor mode
                     if matches!(event, TuiEvent::Escape) {
                         tui.input_mode = InputMode::Cursor;
-                        // Select the last message when entering Cursor mode
-                        let msg_count = app.context.items.len();
-                        tui.message_list.selected_index = if msg_count > 0 {
-                            Some(msg_count - 1)
+                        // Select the last non-ToolResult item when entering Cursor mode
+                        let items = &app.context.items;
+                        let mut idx = items.len();
+                        while idx > 0 {
+                            idx -= 1;
+                            if !matches!(items[idx], ContextItem::ToolResult(_)) {
+                                break;
+                            }
+                        }
+                        tui.message_list.selected_index = if !items.is_empty() {
+                            Some(idx)
                         } else {
                             None
                         };
@@ -272,24 +280,40 @@ pub fn run(provider_choice: Provider) -> std::io::Result<()> {
                             tui.input_mode = InputMode::Input;
                             tui.message_list.selected_index = None;
                         }
-                        // Up/Down navigate messages
+                        // Up/Down navigate messages (skipping consumed ToolResults)
                         TuiEvent::CursorUp => {
-                            let msg_count = app.context.items.len();
-                            if msg_count > 0 {
-                                let idx = tui
+                            let items = &app.context.items;
+                            if !items.is_empty() {
+                                let mut idx = tui
                                     .message_list
                                     .selected_index
                                     .map(|i| i.saturating_sub(1))
-                                    .unwrap_or(msg_count - 1);
+                                    .unwrap_or(items.len() - 1);
+                                // Skip backwards past ToolResult items
+                                while idx > 0
+                                    && matches!(items[idx], ContextItem::ToolResult(_))
+                                {
+                                    idx -= 1;
+                                }
                                 tui.message_list.selected_index = Some(idx);
                             }
                         }
                         TuiEvent::CursorDown => {
-                            let msg_count = app.context.items.len();
-                            if let Some(idx) = tui.message_list.selected_index
-                                && idx + 1 < msg_count
+                            let items = &app.context.items;
+                            if let Some(mut idx) = tui.message_list.selected_index
+                                && idx + 1 < items.len()
                             {
-                                tui.message_list.selected_index = Some(idx + 1);
+                                idx += 1;
+                                // Skip forwards past ToolResult items
+                                while idx < items.len()
+                                    && matches!(items[idx], ContextItem::ToolResult(_))
+                                {
+                                    idx += 1;
+                                }
+                                // Only update if we landed on a valid index
+                                if idx < items.len() {
+                                    tui.message_list.selected_index = Some(idx);
+                                }
                             }
                         }
                         // CycleEffort works in both modes

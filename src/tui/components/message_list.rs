@@ -18,15 +18,17 @@
 //! (including layout cache and scroll state) during the render pass, aligning
 //! with Ratatui's `StatefulWidget` pattern.
 
+use std::collections::{HashMap, HashSet};
+
 use ratatui::Frame;
 use ratatui::layout::{Position, Rect, Size};
 use tui_scrollview::{ScrollView, ScrollViewState, ScrollbarVisibility};
 
-use crate::inference::{Context, Source};
+use crate::inference::{Context, ContextItem, Source};
 use crate::tui::component::{Component, EventHandler};
 use crate::tui::components::logo::Logo;
 use crate::tui::components::message::Message;
-use crate::tui::components::tool_message::{ToolMessage, ToolMessageKind};
+use crate::tui::components::tool_message::ToolGroup;
 use crate::tui::event::TuiEvent;
 
 /// Layout and scroll state for the message list.
@@ -79,21 +81,30 @@ impl MessageListState {
     }
 }
 
-/// Finds the tool name for a result by scanning backwards for the matching ToolCall.
-/// Free function to avoid borrowing `self` (which conflicts with mutable layout borrows).
-fn find_tool_name_for_result<'a>(
-    items: &'a [crate::inference::ContextItem],
-    call_id: &str,
-    before: usize,
-) -> &'a str {
-    for item in items[..before].iter().rev() {
-        if let crate::inference::ContextItem::ToolCall(tc) = item
-            && tc.call_id == call_id
-        {
-            return &tc.name;
+/// Build a lookup from call_id → (index, &ToolResult) for all ToolResult items,
+/// plus the set of consumed ToolResult indices (those whose call_id matches a ToolCall).
+fn build_result_map(items: &[ContextItem]) -> (HashMap<&str, &crate::inference::ToolResult>, HashSet<usize>) {
+    let mut result_map: HashMap<&str, &crate::inference::ToolResult> = HashMap::new();
+    let mut result_indices: HashMap<&str, usize> = HashMap::new();
+
+    for (i, item) in items.iter().enumerate() {
+        if let ContextItem::ToolResult(tr) = item {
+            result_map.insert(&tr.call_id, tr);
+            result_indices.insert(&tr.call_id, i);
         }
     }
-    "unknown"
+
+    // A ToolResult is "consumed" if there's a ToolCall with a matching call_id
+    let mut consumed = HashSet::new();
+    for item in items {
+        if let ContextItem::ToolCall(tc) = item
+            && let Some(&idx) = result_indices.get(tc.call_id.as_str())
+        {
+            consumed.insert(idx);
+        }
+    }
+
+    (result_map, consumed)
 }
 
 /// Scrollable conversation view component.
@@ -130,15 +141,18 @@ impl<'a> Component for MessageList<'a> {
         let content_width = area.width.saturating_sub(1); // -1 for scrollbar safe area
         let num_items = self.context.items.len();
 
+        // Build call_id → &ToolResult lookup and consumed index set
+        let (result_map, consumed) = build_result_map(&self.context.items);
+
         // 1. Update Layout Cache (Internal Mutation)
-        // We can access self.state directly because we have &mut self
-        // and self.state is &mut MessageListState
+        let selected_index = self.state.selected_index;
         let layout = &mut self.state.layout;
         let reusable = layout.reusable_count(
             num_items,
             content_width,
             self.is_loading,
             &self.context.items,
+            selected_index,
         );
 
         layout.heights.truncate(reusable.min(layout.heights.len()));
@@ -150,23 +164,22 @@ impl<'a> Component for MessageList<'a> {
             .enumerate()
             .skip(layout.heights.len())
         {
+            let is_selected = selected_index == Some(i);
             let height = match item {
-                crate::inference::ContextItem::Message(seg) => {
+                ContextItem::Message(seg) => {
                     Message::calculate_height(seg, content_width)
                 }
-                crate::inference::ContextItem::ToolCall(tc) => {
-                    ToolMessage::new(ToolMessageKind::Call(tc)).calculate_height(content_width)
+                ContextItem::ToolCall(tc) => {
+                    let paired_result = result_map.get(tc.call_id.as_str()).copied();
+                    ToolGroup::calculate_height(tc, paired_result, is_selected, content_width)
                 }
-                crate::inference::ContextItem::ToolResult(tr) => {
-                    let name = find_tool_name_for_result(&self.context.items, &tr.call_id, i);
-                    ToolMessage::new(ToolMessageKind::Result(tr, name))
-                        .calculate_height(content_width)
-                }
+                ContextItem::ToolResult(_) if consumed.contains(&i) => 0,
+                ContextItem::ToolResult(_) => 0, // Defensive: orphaned results hidden too
             };
             layout.heights.push(height);
         }
         layout.rebuild_prefix_heights();
-        layout.update_metadata(num_items, content_width);
+        layout.update_metadata(num_items, content_width, selected_index);
 
         let total_height: u16 = self.state.layout.heights.iter().sum();
 
@@ -210,13 +223,18 @@ impl<'a> Component for MessageList<'a> {
             let item = &self.context.items[i];
             let height = self.state.layout.heights[i];
 
+            // Skip consumed ToolResults (height=0, no visual space)
+            if height == 0 {
+                continue;
+            }
+
             let is_last = i == num_items.saturating_sub(1);
             let is_selected = self.state.selected_index == Some(i) && !(is_last && self.is_loading);
 
             let segment_rect = Rect::new(0, y_offset, content_width, height);
 
             match item {
-                crate::inference::ContextItem::Message(seg) => {
+                ContextItem::Message(seg) => {
                     let is_volatile = matches!(
                         seg.source,
                         Source::Model | Source::Thinking | Source::Status
@@ -229,14 +247,17 @@ impl<'a> Component for MessageList<'a> {
                     let message = Message::new(seg, is_selected, pulse_intensity);
                     scroll_view.render_widget(message, segment_rect);
                 }
-                crate::inference::ContextItem::ToolCall(tc) => {
-                    let tool_msg = ToolMessage::new(ToolMessageKind::Call(tc));
-                    scroll_view.render_widget(tool_msg, segment_rect);
+                ContextItem::ToolCall(tc) => {
+                    let paired_result = result_map.get(tc.call_id.as_str()).copied();
+                    let group = ToolGroup {
+                        call: tc,
+                        result: paired_result,
+                        is_selected,
+                    };
+                    scroll_view.render_widget(group, segment_rect);
                 }
-                crate::inference::ContextItem::ToolResult(tr) => {
-                    let name = find_tool_name_for_result(&self.context.items, &tr.call_id, i);
-                    let tool_msg = ToolMessage::new(ToolMessageKind::Result(tr, name));
-                    scroll_view.render_widget(tool_msg, segment_rect);
+                ContextItem::ToolResult(_) => {
+                    // Should not reach here (height=0 items skipped above)
                 }
             }
 
@@ -313,6 +334,8 @@ pub struct LayoutCache {
     pub prefix_heights: Vec<u16>,
     message_count: usize,
     content_width: u16,
+    /// Tracks selected index so ToolCall heights (selection-dependent) are invalidated.
+    cached_selected_index: Option<usize>,
 }
 
 impl Default for LayoutCache {
@@ -328,6 +351,7 @@ impl LayoutCache {
             prefix_heights: Vec::new(),
             message_count: 0,
             content_width: 0,
+            cached_selected_index: None,
         }
     }
 
@@ -336,7 +360,8 @@ impl LayoutCache {
         message_count: usize,
         content_width: u16,
         is_loading: bool,
-        items: &[crate::inference::ContextItem],
+        items: &[ContextItem],
+        selected_index: Option<usize>,
     ) -> usize {
         if self.content_width != content_width || self.heights.is_empty() {
             return 0;
@@ -347,12 +372,26 @@ impl LayoutCache {
             return 0;
         }
 
+        // Selection changed on a ToolCall → height changes (compact vs expanded).
+        // Invalidate from the earliest affected ToolCall index onward.
+        if selected_index != self.cached_selected_index {
+            let affected_indices = [self.cached_selected_index, selected_index];
+            for &idx_opt in &affected_indices {
+                if let Some(idx) = idx_opt
+                    && idx < items.len()
+                    && matches!(items[idx], ContextItem::ToolCall(_))
+                {
+                    return idx;
+                }
+            }
+        }
+
         // If not loading, most heights are stable — but the last Model/Thinking
         // message may have grown during a streaming batch that completed between
         // frames (loading flipped false before we recalculated its height).
         if !is_loading {
             let last_is_volatile = items.last().is_some_and(|last| match last {
-                crate::inference::ContextItem::Message(seg) => {
+                ContextItem::Message(seg) => {
                     matches!(seg.source, Source::Model | Source::Thinking)
                 }
                 _ => false,
@@ -367,11 +406,11 @@ impl LayoutCache {
         // If loading, check if the last item is volatile.
         // Tool calls/results are stable once written. Messages from Model/Thinking are volatile.
         let last_is_stable = items.last().is_some_and(|last| match last {
-            crate::inference::ContextItem::Message(seg) => {
+            ContextItem::Message(seg) => {
                 matches!(seg.source, Source::User | Source::Directive)
             }
-            crate::inference::ContextItem::ToolCall(_)
-            | crate::inference::ContextItem::ToolResult(_) => true,
+            ContextItem::ToolCall(_)
+            | ContextItem::ToolResult(_) => true,
         });
 
         if last_is_stable {
@@ -381,9 +420,10 @@ impl LayoutCache {
         }
     }
 
-    pub fn update_metadata(&mut self, message_count: usize, content_width: u16) {
+    pub fn update_metadata(&mut self, message_count: usize, content_width: u16, selected_index: Option<usize>) {
         self.message_count = message_count;
         self.content_width = content_width;
+        self.cached_selected_index = selected_index;
     }
 
     pub fn rebuild_prefix_heights(&mut self) {
@@ -429,17 +469,17 @@ mod tests {
     fn test_layout_cache_reusable() {
         let mut cache = LayoutCache::new();
         // Initial build
-        cache.update_metadata(5, 80);
+        cache.update_metadata(5, 80, None);
         cache.heights = vec![1; 5]; // Simulating 5 messages of height 1
 
         // Case 1: Same everything -> All reusable
-        assert_eq!(cache.reusable_count(5, 80, false, &[]), 5);
+        assert_eq!(cache.reusable_count(5, 80, false, &[], None), 5);
 
         // Case 2: New message added -> 6 reusable (will be clamped by truncate)
-        assert_eq!(cache.reusable_count(6, 80, false, &[]), 6);
+        assert_eq!(cache.reusable_count(6, 80, false, &[], None), 6);
 
         // Case 3: Width changed -> 0 reusable
-        assert_eq!(cache.reusable_count(5, 40, false, &[]), 0);
+        assert_eq!(cache.reusable_count(5, 40, false, &[], None), 0);
 
         // Case 4: Loading (last message is volatile) -> n-1 reusable
         let volatile_items = vec![crate::inference::ContextItem::Message(
@@ -448,8 +488,8 @@ mod tests {
                 content: String::new(),
             },
         )];
-        cache.update_metadata(1, 80);
-        assert_eq!(cache.reusable_count(1, 80, true, &volatile_items), 0);
+        cache.update_metadata(1, 80, None);
+        assert_eq!(cache.reusable_count(1, 80, true, &volatile_items, None), 0);
 
         // Case 5: Loading (last message is stable) -> n reusable
         let stable_items = vec![crate::inference::ContextItem::Message(
@@ -458,15 +498,15 @@ mod tests {
                 content: String::new(),
             },
         )];
-        cache.update_metadata(1, 80);
-        assert_eq!(cache.reusable_count(1, 80, true, &stable_items), 1);
+        cache.update_metadata(1, 80, None);
+        assert_eq!(cache.reusable_count(1, 80, true, &stable_items, None), 1);
     }
 
     #[test]
     fn test_volatile_last_message_recalculated_after_loading() {
         let mut cache = LayoutCache::new();
         cache.heights = vec![3, 5];
-        cache.update_metadata(2, 80);
+        cache.update_metadata(2, 80, None);
 
         // Streaming just finished: is_loading=false, but last message is Model.
         // Its cached height may be stale from a partial streaming frame.
@@ -482,7 +522,7 @@ mod tests {
         ];
 
         // Should exclude the volatile last item so its height gets recalculated
-        assert_eq!(cache.reusable_count(2, 80, false, &items), 1);
+        assert_eq!(cache.reusable_count(2, 80, false, &items, None), 1);
 
         // Non-volatile last item (User) should trust the cache fully
         let stable_items = vec![
@@ -495,7 +535,7 @@ mod tests {
                 content: "follow-up".into(),
             }),
         ];
-        assert_eq!(cache.reusable_count(2, 80, false, &stable_items), 2);
+        assert_eq!(cache.reusable_count(2, 80, false, &stable_items, None), 2);
     }
 
     /// Replays the exact sequence that triggers the stale-height bug:
@@ -526,7 +566,7 @@ mod tests {
         ];
 
         let mut cache = LayoutCache::new();
-        let reusable = cache.reusable_count(2, width, true, &items_streaming);
+        let reusable = cache.reusable_count(2, width, true, &items_streaming, None);
         cache.heights.truncate(reusable); // 0 — fresh cache
 
         for item in &items_streaming {
@@ -537,7 +577,7 @@ mod tests {
             cache.heights.push(h);
         }
         cache.rebuild_prefix_heights();
-        cache.update_metadata(2, width);
+        cache.update_metadata(2, width, None);
 
         let stale_model_height = cache.heights[1];
 
@@ -553,7 +593,7 @@ mod tests {
         ];
 
         // is_loading = false now. The fix should exclude the last volatile item.
-        let reusable = cache.reusable_count(2, width, false, &items_done);
+        let reusable = cache.reusable_count(2, width, false, &items_done, None);
         assert_eq!(
             reusable, 1,
             "should force recalculation of the volatile last message"
@@ -569,7 +609,7 @@ mod tests {
             cache.heights.push(h);
         }
         cache.rebuild_prefix_heights();
-        cache.update_metadata(2, width);
+        cache.update_metadata(2, width, None);
 
         let fresh_model_height = cache.heights[1];
 
