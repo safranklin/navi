@@ -3,12 +3,6 @@
 //! LM Studio v0.3.29+ supports the /v1/responses endpoint with:
 //! - Reasoning support with effort parameter
 //! - Streaming with SSE events
-//!
-//! We deliberately avoid `previous_response_id` here. LM Studio's LCP
-//! (Longest Common Prefix) KV cache works best when the client sends the
-//! full conversation each turn — the stable prefix gets a near-perfect
-//! cache hit. Using `previous_response_id` causes server-side history
-//! reconstruction that shifts the token layout and tanks cache reuse.
 
 use async_trait::async_trait;
 use log::{debug, info, warn};
@@ -83,8 +77,6 @@ struct ResponsesRequest {
     reasoning: Reasoning,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<ApiToolDefinition>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    previous_response_id: Option<String>,
 }
 
 /// SSE event for delta content (used for both text and reasoning)
@@ -276,10 +268,6 @@ impl CompletionProvider for LmStudioProvider {
     ) -> Result<(), ProviderError> {
         let reasoning = effort_to_reasoning(request.effort);
 
-        // Always send full context — LM Studio's LCP (Longest Common Prefix)
-        // cache works best when the prompt prefix stays stable across turns.
-        // Using previous_response_id causes LM Studio to reconstruct history
-        // server-side, which shifts the token layout and tanks cache hit rates.
         let input = context_to_input(&request.context.items);
 
         let responses_request = ResponsesRequest {
@@ -288,7 +276,6 @@ impl CompletionProvider for LmStudioProvider {
             stream: Some(true),
             reasoning,
             tools: tools_to_api(request.tools),
-            previous_response_id: None,
         };
 
         info!(
@@ -448,14 +435,7 @@ impl CompletionProvider for LmStudioProvider {
                                 chunk_count, total_content_len
                             );
                             debug!("response.completed data: {}", data);
-                            // Don't propagate response_id — we never use
-                            // previous_response_id with LM Studio, so the core
-                            // shouldn't set a watermark for this provider.
-                            if sender
-                                .send(StreamChunk::Completed { response_id: None })
-                                .await
-                                .is_err()
-                            {
+                            if sender.send(StreamChunk::Completed).await.is_err() {
                                 warn!("Completed send failed: receiver dropped");
                                 return Err(ProviderError::ChannelClosed);
                             }
@@ -615,13 +595,11 @@ mod tests {
             stream: None,
             reasoning: effort_to_reasoning(Effort::Auto),
             tools: None,
-            previous_response_id: None,
         };
 
         let json = serde_json::to_string(&request).unwrap();
         assert!(!json.contains("stream"));
         assert!(!json.contains("tools"));
-        assert!(!json.contains("previous_response_id"));
         assert!(json.contains(r#""enabled":true"#));
         assert!(!json.contains(r#""effort""#));
     }
@@ -634,7 +612,6 @@ mod tests {
             stream: Some(true),
             reasoning: effort_to_reasoning(Effort::Medium),
             tools: None,
-            previous_response_id: None,
         };
 
         let json = serde_json::to_string(&request).unwrap();
@@ -705,33 +682,4 @@ mod tests {
         assert_eq!(full.len(), 4); // system + user + model + user
     }
 
-    #[test]
-    fn test_responses_request_previous_response_id_present() {
-        let request = ResponsesRequest {
-            model: "test".to_string(),
-            input: vec![],
-            stream: Some(true),
-            reasoning: effort_to_reasoning(Effort::Auto),
-            tools: None,
-            previous_response_id: Some("resp_abc123".to_string()),
-        };
-
-        let json = serde_json::to_string(&request).unwrap();
-        assert!(json.contains(r#""previous_response_id":"resp_abc123""#));
-    }
-
-    #[test]
-    fn test_responses_request_previous_response_id_omitted_when_none() {
-        let request = ResponsesRequest {
-            model: "test".to_string(),
-            input: vec![],
-            stream: Some(true),
-            reasoning: effort_to_reasoning(Effort::Auto),
-            tools: None,
-            previous_response_id: None,
-        };
-
-        let json = serde_json::to_string(&request).unwrap();
-        assert!(!json.contains("previous_response_id"));
-    }
 }

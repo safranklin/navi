@@ -81,8 +81,6 @@ struct ResponsesRequest {
     reasoning: Reasoning,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<ApiToolDefinition>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    previous_response_id: Option<String>,
 }
 
 /// Generic SSE event wrapper to extract the type field
@@ -298,25 +296,11 @@ impl CompletionProvider for OpenRouterProvider {
     ) -> Result<(), ProviderError> {
         let reasoning = effort_to_reasoning(request.effort);
 
-        // Use prompt caching when we have a previous_response_id: send only
-        // new items and let the server reconstruct prior context.
-        let (input_items, prev_id) = if let Some(prev_response_id) = request.previous_response_id
-            && request.context_watermark > 0
-            && request.context_watermark <= request.context.items.len()
-        {
-            info!(
-                "Prompt caching: sending items[{}..] with previous_response_id",
-                request.context_watermark
-            );
-            (
-                &request.context.items[request.context_watermark..],
-                Some(prev_response_id.to_string()),
-            )
-        } else {
-            (&request.context.items[..], None)
-        };
-
-        let input = context_to_input(input_items);
+        // Always send full context. OpenRouter's Responses API is stateless —
+        // it does not persist conversation state between requests. Prompt
+        // caching happens transparently via KV cache prefix reuse when the
+        // prompt prefix stays stable across turns.
+        let input = context_to_input(&request.context.items);
 
         let responses_request = ResponsesRequest {
             model: request.model.to_string(),
@@ -324,42 +308,16 @@ impl CompletionProvider for OpenRouterProvider {
             stream: Some(true),
             reasoning,
             tools: tools_to_api(request.tools),
-            previous_response_id: prev_id.clone(),
         };
 
         info!(
-            "OpenRouter Responses API request: model={}, input_count={}, effort={:?}, cached={}",
+            "OpenRouter Responses API request: model={}, input_count={}, effort={:?}",
             request.model,
             responses_request.input.len(),
             request.effort,
-            prev_id.is_some()
         );
 
-        let response = self.send_request(&responses_request).await;
-
-        // Fallback: if we used previous_response_id and got 400, retry with full context
-        let response = match response {
-            Err(ProviderError::Api {
-                status: 400,
-                ref message,
-            }) if prev_id.is_some() => {
-                warn!(
-                    "Prompt cache miss (400): {}. Retrying with full context.",
-                    message
-                );
-                let full_input = context_to_input(&request.context.items[..]);
-                let fallback_request = ResponsesRequest {
-                    model: request.model.to_string(),
-                    input: full_input,
-                    stream: Some(true),
-                    reasoning: effort_to_reasoning(request.effort),
-                    tools: tools_to_api(request.tools),
-                    previous_response_id: None,
-                };
-                self.send_request(&fallback_request).await?
-            }
-            other => other?,
-        };
+        let response = self.send_request(&responses_request).await?;
 
         // Process the SSE stream with typed events
         let mut buffer = String::new();
@@ -521,21 +479,12 @@ impl CompletionProvider for OpenRouterProvider {
                             }
                         }
                         Some("response.completed") => {
-                            let response_id = serde_json::from_str::<serde_json::Value>(data)
-                                .ok()
-                                .and_then(|v| {
-                                    v.get("response")?.get("id")?.as_str().map(String::from)
-                                });
                             info!(
-                                "Stream complete: {} chunks, {} content bytes, response_id={:?}",
-                                chunk_count, total_content_len, response_id
+                                "Stream complete: {} chunks, {} content bytes",
+                                chunk_count, total_content_len
                             );
                             debug!("response.completed data: {}", data);
-                            if sender
-                                .send(StreamChunk::Completed { response_id })
-                                .await
-                                .is_err()
-                            {
+                            if sender.send(StreamChunk::Completed).await.is_err() {
                                 warn!("Completed send failed: receiver dropped");
                                 return Err(ProviderError::ChannelClosed);
                             }
@@ -690,13 +639,11 @@ mod tests {
             stream: None,
             reasoning: effort_to_reasoning(Effort::Auto),
             tools: None,
-            previous_response_id: None,
         };
 
         let json = serde_json::to_string(&request).unwrap();
         assert!(!json.contains("stream"));
         assert!(!json.contains("tools"));
-        assert!(!json.contains("previous_response_id"));
         assert!(json.contains(r#""enabled":true"#));
         assert!(!json.contains(r#""effort""#));
     }
@@ -709,7 +656,6 @@ mod tests {
             stream: Some(true),
             reasoning: effort_to_reasoning(Effort::High),
             tools: None,
-            previous_response_id: None,
         };
 
         let json = serde_json::to_string(&request).unwrap();
@@ -725,7 +671,6 @@ mod tests {
             stream: Some(true),
             reasoning: effort_to_reasoning(Effort::None),
             tools: None,
-            previous_response_id: None,
         };
 
         let json = serde_json::to_string(&request).unwrap();

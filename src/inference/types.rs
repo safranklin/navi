@@ -78,7 +78,8 @@ impl Context {
                 "You are a helpful assistant. \
                  TOOL USE IS MANDATORY: if a registered tool can perform a computation, lookup, or action, you MUST call it. \
                  NEVER perform arithmetic, math, or calculations yourself — always delegate to the appropriate tool. \
-                 If a task requires multiple steps, chain tool calls: call the first tool, wait for its result, then call the next. \
+                 When independent sub-expressions can be computed simultaneously, call multiple tools in parallel. \
+                 When a result depends on a previous tool's output, wait for that result before proceeding. \
                  Your text responses should only interpret and present tool results, never substitute for them. \
                  Be direct, be honest about uncertainty, and prefer clarity over hedging.",
             ),
@@ -290,11 +291,8 @@ pub enum StreamChunk {
         item_id: Option<String>,
     },
     ToolCall(ToolCall), // Complete tool call (arguments buffered by provider)
-    /// Signals stream completion. Carries the server's response ID for prompt caching.
-    /// Providers send this as their final chunk before returning Ok(()).
-    Completed {
-        response_id: Option<String>,
-    },
+    /// Signals stream completion. Providers send this as their final chunk before returning Ok(()).
+    Completed,
 }
 
 #[cfg(test)]

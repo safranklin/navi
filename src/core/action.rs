@@ -34,10 +34,7 @@ pub enum Action {
         item_id: Option<String>,
     },
     // Signal that the streaming response is complete.
-    // Carries the server's response ID for prompt caching (None on error/unsupported).
-    ResponseDone {
-        response_id: Option<String>,
-    },
+    ResponseDone,
     // Model wants to call a tool
     ToolCallReceived(ToolCall),
     // A tool execution completed
@@ -94,25 +91,13 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
             app_state.status_message = String::from("Thinking...");
             Effect::Render
         }
-        Action::ResponseDone { response_id } => {
+        Action::ResponseDone => {
             app_state.context.clear_active_streams();
             if let Some(crate::inference::ContextItem::Message(last)) =
                 app_state.context.items.last()
             {
                 debug!("ResponseDone: final message length={}", last.content.len());
             }
-            // Store prompt caching state for next request
-            if response_id.is_some() {
-                app_state.context_watermark = app_state.context.items.len();
-                debug!(
-                    "Prompt cache: response_id={:?}, watermark={}",
-                    response_id, app_state.context_watermark
-                );
-            } else {
-                // No response_id (error or unsupported) — clear cache state
-                app_state.context_watermark = 0;
-            }
-            app_state.last_response_id = response_id;
             if app_state.pending_tool_calls.is_empty() {
                 app_state.is_loading = false;
                 app_state.status_message = String::from("Response complete.");
@@ -235,7 +220,7 @@ mod tests {
         let mut app = test_app();
         app.is_loading = true;
 
-        let effect = update(&mut app, Action::ResponseDone { response_id: None });
+        let effect = update(&mut app, Action::ResponseDone);
 
         assert!(!app.is_loading);
         assert_eq!(app.status_message, "Response complete.");
@@ -356,98 +341,10 @@ mod tests {
         app.is_loading = true;
         app.pending_tool_calls.insert("call_1".to_string());
 
-        let effect = update(&mut app, Action::ResponseDone { response_id: None });
+        let effect = update(&mut app, Action::ResponseDone);
 
         assert!(app.is_loading); // Still loading — tools not done yet
         assert_eq!(effect, Effect::Render);
     }
 
-    #[test]
-    fn test_response_done_stores_response_id_and_watermark() {
-        let mut app = test_app();
-        app.is_loading = true;
-        // Add a user message + model response (2 items total with system directive)
-        app.context.add_user_message("hello".to_string());
-        app.context.add(crate::inference::ContextSegment {
-            source: Source::Model,
-            content: "hi".to_string(),
-        });
-        assert_eq!(app.context.items.len(), 3); // system + user + model
-
-        update(
-            &mut app,
-            Action::ResponseDone {
-                response_id: Some("resp_abc123".to_string()),
-            },
-        );
-
-        assert_eq!(app.last_response_id.as_deref(), Some("resp_abc123"));
-        assert_eq!(app.context_watermark, 3);
-    }
-
-    #[test]
-    fn test_response_done_none_clears_cache_state() {
-        let mut app = test_app();
-        app.is_loading = true;
-        // Simulate prior cached state
-        app.last_response_id = Some("resp_old".to_string());
-        app.context_watermark = 5;
-
-        update(&mut app, Action::ResponseDone { response_id: None });
-
-        assert!(app.last_response_id.is_none());
-        assert_eq!(app.context_watermark, 0);
-    }
-
-    #[test]
-    fn test_watermark_chains_across_agentic_rounds() {
-        let mut app = test_app();
-        app.is_loading = true;
-
-        // Simulate: user message → model response (round 1)
-        app.context.add_user_message("solve 2+2".to_string());
-        app.context.add(crate::inference::ContextSegment {
-            source: Source::Model,
-            content: "Let me calculate.".to_string(),
-        });
-
-        // Response completes with an ID
-        update(
-            &mut app,
-            Action::ResponseDone {
-                response_id: Some("resp_1".to_string()),
-            },
-        );
-        let watermark_after_round1 = app.context_watermark;
-        assert_eq!(watermark_after_round1, app.context.items.len());
-
-        // Simulate: tool call + result added to context (agentic continuation)
-        let tc = make_tool_call("add", "call_1");
-        app.pending_tool_calls.insert("call_1".to_string());
-        update(&mut app, Action::ToolCallReceived(tc));
-        update(
-            &mut app,
-            Action::ToolResultReady {
-                call_id: "call_1".to_string(),
-                output: "4".to_string(),
-            },
-        );
-
-        // After agentic continuation, the model responds again
-        app.context.add(crate::inference::ContextSegment {
-            source: Source::Model,
-            content: "The answer is 4.".to_string(),
-        });
-        update(
-            &mut app,
-            Action::ResponseDone {
-                response_id: Some("resp_2".to_string()),
-            },
-        );
-
-        // Watermark should advance past the new items
-        assert!(app.context_watermark > watermark_after_round1);
-        assert_eq!(app.last_response_id.as_deref(), Some("resp_2"));
-        assert_eq!(app.context_watermark, app.context.items.len());
-    }
 }

@@ -37,11 +37,6 @@ pub struct CompletionRequest<'a> {
     pub model: &'a str,
     pub effort: Effort,
     pub tools: &'a [ToolDefinition], // empty slice = no tools
-    /// Server's response ID from the previous turn (enables prompt caching).
-    /// When set, providers may send only items after `context_watermark`.
-    pub previous_response_id: Option<&'a str>,
-    /// Index into context.items: items before this are cached server-side.
-    pub context_watermark: usize,
 }
 
 #[async_trait]
