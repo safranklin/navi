@@ -27,19 +27,46 @@ pub(super) fn inner_width(content_width: u16) -> u16 {
 /// Count wrapped lines for the given text, accounting for trailing newlines
 /// that textwrap may not represent as empty lines.
 pub(super) fn wrap_line_count(text: &str, width: u16) -> u16 {
+    wrapped_line_byte_starts(text, width).len() as u16
+}
+
+/// Compute the starting byte offset in `text` for each line produced by textwrap.
+///
+/// Accounts for whitespace consumed at word-wrap boundaries (spaces that textwrap
+/// eats when breaking lines) and explicit newline characters. This is the
+/// ground-truth mapping from wrapped display lines back to buffer positions.
+pub(super) fn wrapped_line_byte_starts(text: &str, width: u16) -> Vec<usize> {
     if width == 0 || text.is_empty() {
-        return 1;
+        return vec![0];
     }
 
+    let bytes = text.as_bytes();
     let lines = textwrap::wrap(text, wrap_options(width));
-    let mut count = (lines.len() as u16).max(1);
+    let mut starts = Vec::with_capacity(lines.len() + 1);
+    let mut offset = 0;
 
-    // textwrap doesn't always produce an empty trailing line for a trailing newline
-    if text.ends_with('\n') && !lines.last().is_some_and(|l| l.is_empty()) {
-        count += 1;
+    for (i, line) in lines.iter().enumerate() {
+        starts.push(offset);
+        offset += line.len();
+
+        // Between lines, skip the separator that textwrap consumed:
+        // spaces (word-wrap), newline (hard break), or spaces-then-newline.
+        if i < lines.len() - 1 && offset < bytes.len() {
+            while offset < bytes.len() && bytes[offset] == b' ' {
+                offset += 1;
+            }
+            if offset < bytes.len() && bytes[offset] == b'\n' {
+                offset += 1;
+            }
+        }
     }
 
-    count
+    // textwrap doesn't always produce an empty trailing line for a trailing \n
+    if text.ends_with('\n') && !lines.last().is_some_and(|l| l.is_empty()) {
+        starts.push(text.len());
+    }
+
+    starts
 }
 
 /// Find the byte offset of the previous character boundary before `pos` in `text`.
@@ -331,5 +358,101 @@ mod tests {
     fn next_word_from_middle() {
         // "hello world" — from 2 (mid-"hello"), skip remaining "llo" → 5
         assert_eq!(next_word_boundary("hello world", 2), 5);
+    }
+
+    // -- wrapped_line_byte_starts ---------------------------------------------
+
+    #[test]
+    fn byte_starts_simple_wrap() {
+        // "hello world" at width 5 → ["hello", "world"]
+        // "hello" at [0..5], space consumed, "world" at [6..11]
+        assert_eq!(wrapped_line_byte_starts("hello world", 5), vec![0, 6]);
+    }
+
+    #[test]
+    fn byte_starts_no_wrap() {
+        // Fits on one line
+        assert_eq!(wrapped_line_byte_starts("hello", 80), vec![0]);
+    }
+
+    #[test]
+    fn byte_starts_break_words() {
+        // "abcdef" at width 3 → ["abc", "def"], no separator consumed
+        assert_eq!(wrapped_line_byte_starts("abcdef", 3), vec![0, 3]);
+    }
+
+    #[test]
+    fn byte_starts_multi_wrap() {
+        // "abc def ghi" at width 4 → ["abc", "def", "ghi"]
+        // "abc" at [0..3], space at 3 consumed, "def" at [4..7], space at 7 consumed, "ghi" at [8..11]
+        assert_eq!(wrapped_line_byte_starts("abc def ghi", 4), vec![0, 4, 8]);
+    }
+
+    #[test]
+    fn byte_starts_explicit_newline() {
+        // "hello\nworld" → ["hello", "world"]
+        assert_eq!(wrapped_line_byte_starts("hello\nworld", 80), vec![0, 6]);
+    }
+
+    #[test]
+    fn byte_starts_mixed_wrap_and_newline() {
+        // "abc def\nghi jkl" at width 4 → ["abc", "def", "ghi", "jkl"]
+        // "abc" [0..3], space consumed → 4, "def" [4..7], \n consumed → 8,
+        // "ghi" [8..11], space consumed → 12, "jkl" [12..15]
+        assert_eq!(
+            wrapped_line_byte_starts("abc def\nghi jkl", 4),
+            vec![0, 4, 8, 12]
+        );
+    }
+
+    #[test]
+    fn byte_starts_trailing_newline() {
+        // "hello\n" → textwrap gives ["hello"], but cursor can be after the \n
+        let starts = wrapped_line_byte_starts("hello\n", 80);
+        assert_eq!(starts, vec![0, 6]);
+    }
+
+    #[test]
+    fn byte_starts_double_trailing_newline() {
+        // "hello\n\n" → textwrap gives ["hello", ""] or ["hello", "", ""]
+        let starts = wrapped_line_byte_starts("hello\n\n", 80);
+        // Should have 3 lines: "hello", "", and the trailing empty line
+        assert_eq!(starts.len(), 3);
+        assert_eq!(starts[0], 0);
+        assert_eq!(starts[1], 6);
+        assert_eq!(starts[2], 7);
+    }
+
+    #[test]
+    fn byte_starts_multiple_spaces_at_wrap() {
+        // "hello  world" at width 5 → ["hello", "world"]
+        // Two spaces consumed at wrap boundary
+        assert_eq!(wrapped_line_byte_starts("hello  world", 5), vec![0, 7]);
+    }
+
+    #[test]
+    fn byte_starts_space_then_newline() {
+        // "hello \n" — space before newline. textwrap strips trailing space from line,
+        // so line 0 = "hello" (5 bytes). Both the space AND newline are separators.
+        // Line 1 (empty) should start at byte 7, not byte 6.
+        let starts = wrapped_line_byte_starts("hello \n", 80);
+        assert_eq!(starts, vec![0, 7]);
+    }
+
+    #[test]
+    fn byte_starts_multiple_spaces_then_newline() {
+        // "hello  \nworld" — two spaces then newline
+        let starts = wrapped_line_byte_starts("hello  \nworld", 80);
+        assert_eq!(starts, vec![0, 8]);
+    }
+
+    #[test]
+    fn byte_starts_empty_string() {
+        assert_eq!(wrapped_line_byte_starts("", 80), vec![0]);
+    }
+
+    #[test]
+    fn byte_starts_zero_width() {
+        assert_eq!(wrapped_line_byte_starts("hello", 0), vec![0]);
     }
 }

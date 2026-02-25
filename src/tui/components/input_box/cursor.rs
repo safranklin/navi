@@ -5,9 +5,10 @@
 //! owned by `InputBox`, keeping the dependency visible.
 
 use super::text_wrap::{
-    BORDER_OFFSET, MAX_VISIBLE_LINES, inner_width, wrap_line_count, wrap_options,
+    BORDER_OFFSET, MAX_VISIBLE_LINES, inner_width, wrap_line_count, wrapped_line_byte_starts,
 };
 use ratatui::layout::Rect;
+use unicode_width::UnicodeWidthStr;
 
 /// Cursor and scroll state, separated from the text buffer.
 pub(super) struct CursorState {
@@ -17,6 +18,25 @@ pub(super) struct CursorState {
     pub scroll_offset: u16,
     /// Cached content width from last render (used for cursor movement)
     pub last_content_width: u16,
+}
+
+/// Find which wrapped line a byte position falls on, given the line start offsets.
+fn line_index_for_pos(starts: &[usize], pos: usize) -> usize {
+    starts.iter().rposition(|&s| s <= pos).unwrap_or(0)
+}
+
+/// Content byte length of a wrapped line, derived from the starts vector.
+///
+/// The slice from `starts[i]` to `starts[i+1]` (or buffer end) includes any
+/// separator chars (spaces/newlines) that textwrap consumed between lines.
+/// Trimming those gives back the actual content length.
+fn line_content_len(starts: &[usize], line_idx: usize, buffer: &str) -> usize {
+    let start = starts[line_idx];
+    let end = starts
+        .get(line_idx + 1)
+        .copied()
+        .unwrap_or(buffer.len());
+    buffer[start..end].trim_end_matches([' ', '\n']).len()
 }
 
 impl CursorState {
@@ -45,54 +65,25 @@ impl CursorState {
             return false;
         }
 
-        let lines = textwrap::wrap(buffer, wrap_options(width));
-        if lines.is_empty() {
-            return false;
-        }
+        let starts = wrapped_line_byte_starts(buffer, width);
 
-        // Calculate byte length of a wrapped line including its trailing newline (if present)
-        let line_byte_span = |line: &str, offset: usize| -> usize {
-            let has_newline = offset + line.len() < buffer.len()
-                && buffer.as_bytes()[offset + line.len()] == b'\n';
-            line.len() + usize::from(has_newline)
-        };
+        let current = line_index_for_pos(&starts, self.pos);
+        let column = self.pos - starts[current];
 
-        // Find which wrapped line the cursor is on and its column offset
-        let mut byte_offset = 0;
-        let mut current_line_idx = 0;
-        let mut column_in_line = 0;
-
-        for (idx, line) in lines.iter().enumerate() {
-            if byte_offset + line.len() >= self.pos {
-                current_line_idx = idx;
-                column_in_line = self.pos - byte_offset;
-                break;
-            }
-            byte_offset += line_byte_span(line, byte_offset);
-        }
-
-        // Calculate target line index, returning false if at boundary
-        let target_line_idx = if direction < 0 {
-            if current_line_idx == 0 {
+        let target = if direction < 0 {
+            if current == 0 {
                 return false;
             }
-            current_line_idx - 1
+            current - 1
         } else {
-            if current_line_idx >= lines.len() - 1 {
+            if current >= starts.len() - 1 {
                 return false;
             }
-            current_line_idx + 1
+            current + 1
         };
 
-        // Walk forward to find byte offset of the target line
-        let mut target_line_start = 0;
-        for line in lines.iter().take(target_line_idx) {
-            target_line_start += line_byte_span(line, target_line_start);
-        }
-
-        // Place cursor at the same column, clamped to the target line's length
-        let target_column = column_in_line.min(lines[target_line_idx].len());
-        self.pos = target_line_start + target_column;
+        let target_len = line_content_len(&starts, target, buffer);
+        self.pos = starts[target] + column.min(target_len);
 
         true
     }
@@ -104,19 +95,8 @@ impl CursorState {
             return 0;
         }
 
-        let text_before_cursor = &buffer[..self.pos];
-        let lines = textwrap::wrap(text_before_cursor, wrap_options(width));
-        let mut cursor_line = lines.len().saturating_sub(1) as u16;
-
-        // If cursor is right after a newline that textwrap didn't represent, add one
-        if self.pos > 0
-            && buffer.as_bytes()[self.pos - 1] == b'\n'
-            && !lines.last().is_some_and(|l| l.is_empty())
-        {
-            cursor_line += 1;
-        }
-
-        cursor_line
+        let starts = wrapped_line_byte_starts(buffer, width);
+        line_index_for_pos(&starts, self.pos) as u16
     }
 
     /// Update scroll offset to keep cursor visible within the viewport.
@@ -146,41 +126,16 @@ impl CursorState {
             return (area.x + BORDER_OFFSET, area.y + BORDER_OFFSET);
         }
 
-        let options = wrap_options(width);
-        let text_before_cursor = &buffer[..self.pos];
-        let lines = textwrap::wrap(text_before_cursor, &options);
+        let starts = wrapped_line_byte_starts(buffer, width);
+        let line_idx = line_index_for_pos(&starts, self.pos);
+        let line_start = starts[line_idx];
 
-        let cursor_line = lines.len().saturating_sub(1) as u16;
+        let cursor_col = UnicodeWidthStr::width(&buffer[line_start..self.pos]) as u16;
+        let visible_line = (line_idx as u16).saturating_sub(self.scroll_offset);
 
-        // Calculate cursor column by counting chars from last newline (preserves spaces!).
-        // textwrap trims trailing whitespace, so we can't use wrapped line length.
-        let last_newline = text_before_cursor
-            .rfind('\n')
-            .map(|pos| pos + 1)
-            .unwrap_or(0);
-        let logical_line_to_cursor = &text_before_cursor[last_newline..];
-
-        // Wrap just the current logical line to find which wrapped segment we're on
-        let logical_line_wrapped = textwrap::wrap(logical_line_to_cursor, options);
-
-        let cursor_col = if logical_line_wrapped.is_empty() {
-            0
-        } else {
-            let chars_in_prev_segments: usize = logical_line_wrapped
-                .iter()
-                .take(logical_line_wrapped.len() - 1)
-                .map(|seg| seg.chars().count())
-                .sum();
-
-            let total_chars = logical_line_to_cursor.chars().count();
-            (total_chars - chars_in_prev_segments) as u16
-        };
-
-        let visible_line = cursor_line.saturating_sub(self.scroll_offset);
-
-        let screen_col = area.x + BORDER_OFFSET + cursor_col;
-        let screen_row = area.y + BORDER_OFFSET + visible_line;
-
-        (screen_col, screen_row)
+        (
+            area.x + BORDER_OFFSET + cursor_col,
+            area.y + BORDER_OFFSET + visible_line,
+        )
     }
 }

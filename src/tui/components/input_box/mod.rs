@@ -42,10 +42,6 @@ pub enum InputEvent {
     ContentChanged,
 }
 
-/// Stores the last killed (cut) text for later yanking (paste).
-///
-/// Emacs-style kill commands (`Ctrl+U`, `Ctrl+K`, `Ctrl+W`) store their
-/// deleted text here. `Ctrl+Y` yanks (pastes) it back.
 /// Session input history with draft preservation.
 ///
 /// When navigating with Up/Down at the input boundary, cycles through
@@ -130,6 +126,10 @@ impl InputHistory {
     }
 }
 
+/// Stores the last killed (cut) text for later yanking (paste).
+///
+/// Emacs-style kill commands (`Ctrl+U`, `Ctrl+K`, `Ctrl+W`) store their
+/// deleted text here. `Ctrl+Y` yanks (pastes) it back.
 pub(crate) struct KillBuffer {
     content: String,
 }
@@ -182,9 +182,6 @@ pub struct InputBox {
 }
 
 impl InputBox {
-    /// Pastes larger than this are replaced with a placeholder to avoid flooding the input.
-    const LARGE_PASTE_THRESHOLD: usize = 1000;
-
     /// Create a new InputBox with initial state
     pub fn new(effort: Effort) -> Self {
         Self {
@@ -206,13 +203,9 @@ impl InputBox {
         visible_lines + VERTICAL_OVERHEAD
     }
 
-    /// Get the visible text based on current scroll offset.
-    /// When scroll_offset > 0, only returns the visible lines.
+    /// Get the visible text, pre-wrapped with textwrap so Paragraph rendering
+    /// matches cursor position calculations exactly.
     fn get_visible_text(&self, content_width: u16) -> String {
-        if self.cursor.scroll_offset == 0 {
-            return self.buffer.clone();
-        }
-
         let width = inner_width(content_width);
         if width == 0 {
             return String::new();
@@ -223,7 +216,16 @@ impl InputBox {
         let start = self.cursor.scroll_offset as usize;
         let end = (start + MAX_VISIBLE_LINES as usize).min(lines.len());
 
-        lines[start..end].join("\n")
+        // Handle trailing newline that textwrap doesn't represent as an empty line
+        let mut result: String = lines[start..end].join("\n");
+        if self.buffer.ends_with('\n')
+            && end == lines.len()
+            && !lines.last().is_some_and(|l| l.is_empty())
+        {
+            result.push('\n');
+        }
+
+        result
     }
 
     /// Render scrollbar when content exceeds visible area
@@ -306,14 +308,10 @@ impl EventHandler for InputBox {
             }
             TuiEvent::Paste(text) => {
                 self.history.reset_navigation();
-                if text.len() > Self::LARGE_PASTE_THRESHOLD {
-                    let placeholder = format!("[pasted {} chars]", text.len());
-                    self.buffer.insert_str(self.cursor.pos, &placeholder);
-                    self.cursor.pos += placeholder.len();
-                } else {
-                    self.buffer.insert_str(self.cursor.pos, text);
-                    self.cursor.pos += text.len();
-                }
+                // Strip \r from Windows-style line endings before inserting
+                let text = text.replace('\r', "");
+                self.buffer.insert_str(self.cursor.pos, &text);
+                self.cursor.pos += text.len();
                 Some(InputEvent::ContentChanged)
             }
             TuiEvent::Backspace => {
@@ -843,12 +841,13 @@ mod tests {
     // -- Paste improvements ---------------------------------------------------
 
     #[test]
-    fn test_large_paste_shows_placeholder() {
+    fn test_large_paste_inserts_full_text() {
         let mut input = InputBox::new(Effort::Low);
         let large_text = "x".repeat(1500);
 
-        input.handle_event(&TuiEvent::Paste(large_text));
-        assert_eq!(input.buffer, "[pasted 1500 chars]");
+        input.handle_event(&TuiEvent::Paste(large_text.clone()));
+        assert_eq!(input.buffer, large_text);
+        assert_eq!(input.cursor.pos, 1500);
     }
 
     #[test]
@@ -856,6 +855,13 @@ mod tests {
         let mut input = InputBox::new(Effort::Low);
         input.handle_event(&TuiEvent::Paste("hello world".to_string()));
         assert_eq!(input.buffer, "hello world");
+    }
+
+    #[test]
+    fn test_paste_strips_carriage_returns() {
+        let mut input = InputBox::new(Effort::Low);
+        input.handle_event(&TuiEvent::Paste("hello\r\nworld\r\n".to_string()));
+        assert_eq!(input.buffer, "hello\nworld\n");
     }
 
     // -- Rendering -----------------------------------------------------------
