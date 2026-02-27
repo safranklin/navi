@@ -2,7 +2,7 @@
 //!
 //! Renders a tool call paired with its result as a single bordered block.
 //!
-//! **Collapsed** (not selected):
+//! **Collapsed** (default — border brightens when selected):
 //!   `╭─ ◈ add ─────────────────────╮`
 //!   `│ a: 42, b: 8 → result: 50 │`
 //!   `╰───────────────────────────╯`
@@ -12,7 +12,7 @@
 //!   `│ a: 42, b: 8 …              │`
 //!   `╰───────────────────────────╯`
 //!
-//! **Expanded** (selected, pretty-printed JSON capped at MAX_SECTION_LINES):
+//! **Expanded** (toggled via click or Space, pretty-printed JSON capped at MAX_SECTION_LINES):
 //!   `╭─ ◈ add ─────────────────────╮`
 //!   `│ ▸ input                   │`
 //!   `│   {                       │`
@@ -72,18 +72,19 @@ pub struct ToolGroup<'a> {
     pub call: &'a ToolCall,
     pub result: Option<&'a ToolResult>,
     pub is_selected: bool,
+    pub is_expanded: bool,
     pub spinner_frame: usize,
 }
 
 impl<'a> ToolGroup<'a> {
     /// Calculate height needed to render this group at the given width.
     ///
-    /// Collapsed (not selected): borders + 1 summary line.
-    /// Expanded (selected): borders + pretty-printed args + result (capped per section).
+    /// Collapsed: borders + 1 summary line.
+    /// Expanded: borders + pretty-printed args + result (capped per section).
     pub fn calculate_height(
         call: &ToolCall,
         result: Option<&ToolResult>,
-        is_selected: bool,
+        is_expanded: bool,
         width: u16,
     ) -> u16 {
         let content_width = width.saturating_sub(HORIZONTAL_OVERHEAD) as usize;
@@ -91,7 +92,7 @@ impl<'a> ToolGroup<'a> {
             return 1;
         }
 
-        if !is_selected {
+        if !is_expanded {
             return 1 + VERTICAL_OVERHEAD;
         }
 
@@ -131,7 +132,7 @@ impl<'a> Widget for ToolGroup<'a> {
             return;
         }
 
-        if self.is_selected {
+        if self.is_expanded {
             self.render_expanded(area, buf);
         } else {
             self.render_collapsed(area, buf);
@@ -142,9 +143,14 @@ impl<'a> Widget for ToolGroup<'a> {
 impl<'a> ToolGroup<'a> {
     /// Bordered block with a single summary line using colored spans.
     /// Args in dim yellow, ` → ` separator gray, result in dim white.
+    /// Border brightens when selected to indicate the item is focused.
     fn render_collapsed(self, area: Rect, buf: &mut Buffer) {
         let title = format!("{} {}", self.icon(), self.call.name);
-        let border_style = tool_style().add_modifier(Modifier::DIM);
+        let border_style = if self.is_selected {
+            tool_style() // Bright border when selected (press Space to expand)
+        } else {
+            tool_style().add_modifier(Modifier::DIM)
+        };
 
         let block = Block::bordered()
             .title(title)

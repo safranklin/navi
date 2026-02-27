@@ -211,6 +211,31 @@ pub fn run(provider_choice: Provider) -> std::io::Result<()> {
                 continue;
             }
 
+            // Mouse click — toggle expansion on tool calls
+            if let TuiEvent::MouseClick(_col, row) = event {
+                let frame_area = terminal.get_frame().area();
+                let scroll_offset = tui.message_list.scroll_state.offset().y;
+                let input_height = tui.input_box.calculate_height(frame_area.width);
+
+                let hit = ui::hit_test_message(
+                    row,
+                    frame_area,
+                    scroll_offset,
+                    &tui.message_list.layout.prefix_heights,
+                    input_height,
+                );
+
+                if let Some(idx) = hit {
+                    tui.message_list.selected_index = Some(idx);
+                    if matches!(app.context.items.get(idx), Some(ContextItem::ToolCall(_)))
+                        && !tui.message_list.expanded_indices.remove(&idx)
+                    {
+                        tui.message_list.expanded_indices.insert(idx);
+                    }
+                }
+                continue;
+            }
+
             // Scroll events — always go to MessageList regardless of mode
             if matches!(
                 event,
@@ -269,6 +294,18 @@ pub fn run(provider_choice: Provider) -> std::io::Result<()> {
                     match event {
                         // Esc in Cursor mode is a no-op
                         TuiEvent::Escape => {}
+                        // Space toggles expansion of selected tool call
+                        TuiEvent::InputChar(' ') => {
+                            if let Some(idx) = tui.message_list.selected_index
+                                && matches!(
+                                    app.context.items.get(idx),
+                                    Some(ContextItem::ToolCall(_))
+                                )
+                                && !tui.message_list.expanded_indices.remove(&idx)
+                            {
+                                tui.message_list.expanded_indices.insert(idx);
+                            }
+                        }
                         // Typing auto-switches to Input mode and forwards the event
                         TuiEvent::InputChar(_) | TuiEvent::Paste(_) => {
                             tui.input_mode = InputMode::Input;
@@ -296,6 +333,7 @@ pub fn run(provider_choice: Provider) -> std::io::Result<()> {
                                     idx -= 1;
                                 }
                                 tui.message_list.selected_index = Some(idx);
+                                tui.message_list.scroll_to_selected();
                             }
                         }
                         TuiEvent::CursorDown => {
@@ -313,6 +351,7 @@ pub fn run(provider_choice: Provider) -> std::io::Result<()> {
                                 // Only update if we landed on a valid index
                                 if idx < items.len() {
                                     tui.message_list.selected_index = Some(idx);
+                                    tui.message_list.scroll_to_selected();
                                 }
                             }
                         }

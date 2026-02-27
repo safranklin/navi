@@ -1,4 +1,6 @@
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
+use crossterm::event::{
+    self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
+};
 
 /// TUI-specific input events
 pub enum TuiEvent {
@@ -37,7 +39,8 @@ pub enum TuiEvent {
     ScrollPageDown,
 
     MouseMove(u16, u16),
-    CycleEffort, // Ctrl+R to cycle reasoning effort
+    MouseClick(u16, u16), // Left click — col, row
+    CycleEffort,          // Ctrl+R to cycle reasoning effort
     Resize,      // Terminal resized — triggers redraw
 }
 
@@ -121,6 +124,9 @@ pub fn poll_event_timeout(timeout: std::time::Duration) -> Option<TuiEvent> {
             Event::Mouse(mouse_event) => match mouse_event.kind {
                 MouseEventKind::Moved => {
                     Some(TuiEvent::MouseMove(mouse_event.column, mouse_event.row))
+                }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    Some(TuiEvent::MouseClick(mouse_event.column, mouse_event.row))
                 }
                 MouseEventKind::ScrollUp => Some(TuiEvent::ScrollUp),
                 MouseEventKind::ScrollDown => Some(TuiEvent::ScrollDown),

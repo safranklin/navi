@@ -44,6 +44,8 @@ pub struct MessageListState {
     pub max_scroll_reached: u16,
     /// Currently selected message index (hover or keyboard navigation)
     pub selected_index: Option<usize>,
+    /// Tool call indices that are currently expanded (toggled by click or Space)
+    pub expanded_indices: HashSet<usize>,
     /// Last known viewport height (for scroll clamping between frames)
     pub viewport_height: u16,
 }
@@ -62,6 +64,7 @@ impl MessageListState {
             stick_to_bottom: true, // Start attached to bottom
             max_scroll_reached: 0,
             selected_index: None,
+            expanded_indices: HashSet::new(),
             viewport_height: 0,
         }
     }
@@ -73,6 +76,56 @@ impl MessageListState {
         let max_y = total_content_height.saturating_sub(self.viewport_height);
         let current = self.scroll_state.offset();
         if current.y > max_y {
+            self.scroll_state.set_offset(Position {
+                x: current.x,
+                y: max_y,
+            });
+        }
+    }
+
+    /// Scroll the viewport so the selected message is fully visible.
+    /// If the message is taller than the viewport, align its top edge.
+    pub fn scroll_to_selected(&mut self) {
+        let Some(idx) = self.selected_index else {
+            return;
+        };
+        if idx >= self.layout.prefix_heights.len() {
+            return;
+        }
+
+        let item_top = if idx == 0 {
+            0
+        } else {
+            self.layout.prefix_heights[idx - 1]
+        };
+        let item_bottom = self.layout.prefix_heights[idx];
+        let offset_y = self.scroll_state.offset().y;
+
+        if item_top < offset_y {
+            // Selected message is above viewport — scroll up to show its top
+            self.scroll_state
+                .set_offset(Position { x: 0, y: item_top });
+            self.stick_to_bottom = false;
+        } else if item_bottom > offset_y + self.viewport_height {
+            // Selected message is below viewport — scroll down to show its bottom
+            let new_y = item_bottom.saturating_sub(self.viewport_height);
+            self.scroll_state
+                .set_offset(Position { x: 0, y: new_y });
+            // Re-pin if we've landed at the absolute bottom
+            let total: u16 = self.layout.heights.iter().sum();
+            let max_y = total.saturating_sub(self.viewport_height);
+            self.stick_to_bottom = new_y >= max_y;
+        }
+    }
+
+    /// Clamp scroll and re-engage auto-scroll if the user has reached the bottom.
+    /// Called on scroll-down events so that scrolling past the end re-pins to bottom.
+    pub fn repin_if_at_bottom(&mut self) {
+        let total_content_height: u16 = self.layout.heights.iter().sum();
+        let max_y = total_content_height.saturating_sub(self.viewport_height);
+        let current = self.scroll_state.offset();
+        if current.y >= max_y {
+            self.stick_to_bottom = true;
             self.scroll_state.set_offset(Position {
                 x: current.x,
                 y: max_y,
@@ -145,14 +198,14 @@ impl<'a> Component for MessageList<'a> {
         let (result_map, consumed) = build_result_map(&self.context.items);
 
         // 1. Update Layout Cache (Internal Mutation)
-        let selected_index = self.state.selected_index;
+        let expanded_indices = &self.state.expanded_indices;
         let layout = &mut self.state.layout;
         let reusable = layout.reusable_count(
             num_items,
             content_width,
             self.is_loading,
             &self.context.items,
-            selected_index,
+            expanded_indices,
         );
 
         layout.heights.truncate(reusable.min(layout.heights.len()));
@@ -164,14 +217,14 @@ impl<'a> Component for MessageList<'a> {
             .enumerate()
             .skip(layout.heights.len())
         {
-            let is_selected = selected_index == Some(i);
+            let is_expanded = expanded_indices.contains(&i);
             let height = match item {
                 ContextItem::Message(seg) => {
                     Message::calculate_height(seg, content_width)
                 }
                 ContextItem::ToolCall(tc) => {
                     let paired_result = result_map.get(tc.call_id.as_str()).copied();
-                    ToolGroup::calculate_height(tc, paired_result, is_selected, content_width)
+                    ToolGroup::calculate_height(tc, paired_result, is_expanded, content_width)
                 }
                 ContextItem::ToolResult(_) if consumed.contains(&i) => 0,
                 ContextItem::ToolResult(_) => 0, // Defensive: orphaned results hidden too
@@ -179,7 +232,7 @@ impl<'a> Component for MessageList<'a> {
             layout.heights.push(height);
         }
         layout.rebuild_prefix_heights();
-        layout.update_metadata(num_items, content_width, selected_index);
+        layout.update_metadata(num_items, content_width, expanded_indices);
 
         let total_height: u16 = self.state.layout.heights.iter().sum();
 
@@ -253,6 +306,7 @@ impl<'a> Component for MessageList<'a> {
                         call: tc,
                         result: paired_result,
                         is_selected,
+                        is_expanded: self.state.expanded_indices.contains(&i),
                         spinner_frame: self.spinner_frame,
                     };
                     scroll_view.render_widget(group, segment_rect);
@@ -310,7 +364,7 @@ impl EventHandler for MessageListState {
             }
             TuiEvent::ScrollDown => {
                 self.scroll_state.scroll_down();
-                self.clamp_scroll();
+                self.repin_if_at_bottom();
                 None
             }
             TuiEvent::ScrollPageUp => {
@@ -320,7 +374,7 @@ impl EventHandler for MessageListState {
             }
             TuiEvent::ScrollPageDown => {
                 self.scroll_state.scroll_page_down();
-                self.clamp_scroll();
+                self.repin_if_at_bottom();
                 None
             }
             // Mouse moves handled by parent for now due to hit testing complexity
@@ -335,8 +389,8 @@ pub struct LayoutCache {
     pub prefix_heights: Vec<u16>,
     message_count: usize,
     content_width: u16,
-    /// Tracks selected index so ToolCall heights (selection-dependent) are invalidated.
-    cached_selected_index: Option<usize>,
+    /// Tracks which tool calls are expanded so heights are invalidated on toggle.
+    cached_expanded_indices: HashSet<usize>,
 }
 
 impl Default for LayoutCache {
@@ -352,7 +406,7 @@ impl LayoutCache {
             prefix_heights: Vec::new(),
             message_count: 0,
             content_width: 0,
-            cached_selected_index: None,
+            cached_expanded_indices: HashSet::new(),
         }
     }
 
@@ -362,7 +416,7 @@ impl LayoutCache {
         content_width: u16,
         is_loading: bool,
         items: &[ContextItem],
-        selected_index: Option<usize>,
+        expanded_indices: &HashSet<usize>,
     ) -> usize {
         if self.content_width != content_width || self.heights.is_empty() {
             return 0;
@@ -373,18 +427,16 @@ impl LayoutCache {
             return 0;
         }
 
-        // Selection changed on a ToolCall → height changes (compact vs expanded).
-        // Invalidate from the earliest affected ToolCall index onward.
-        if selected_index != self.cached_selected_index {
-            let affected_indices = [self.cached_selected_index, selected_index];
-            for &idx_opt in &affected_indices {
-                if let Some(idx) = idx_opt
-                    && idx < items.len()
-                    && matches!(items[idx], ContextItem::ToolCall(_))
-                {
-                    return idx;
-                }
-            }
+        // Expansion state changed → height changes for affected ToolCalls.
+        // Invalidate from the earliest toggled index onward.
+        if expanded_indices != &self.cached_expanded_indices
+            && let Some(earliest) = expanded_indices
+                .symmetric_difference(&self.cached_expanded_indices)
+                .copied()
+                .min()
+            && earliest < items.len()
+        {
+            return earliest;
         }
 
         // If not loading, most heights are stable — but the last Model/Thinking
@@ -421,10 +473,10 @@ impl LayoutCache {
         }
     }
 
-    pub fn update_metadata(&mut self, message_count: usize, content_width: u16, selected_index: Option<usize>) {
+    pub fn update_metadata(&mut self, message_count: usize, content_width: u16, expanded_indices: &HashSet<usize>) {
         self.message_count = message_count;
         self.content_width = content_width;
-        self.cached_selected_index = selected_index;
+        self.cached_expanded_indices = expanded_indices.clone();
     }
 
     pub fn rebuild_prefix_heights(&mut self) {
@@ -469,18 +521,19 @@ mod tests {
     #[test]
     fn test_layout_cache_reusable() {
         let mut cache = LayoutCache::new();
+        let no_expanded = HashSet::new();
         // Initial build
-        cache.update_metadata(5, 80, None);
+        cache.update_metadata(5, 80, &no_expanded);
         cache.heights = vec![1; 5]; // Simulating 5 messages of height 1
 
         // Case 1: Same everything -> All reusable
-        assert_eq!(cache.reusable_count(5, 80, false, &[], None), 5);
+        assert_eq!(cache.reusable_count(5, 80, false, &[], &no_expanded), 5);
 
         // Case 2: New message added -> 6 reusable (will be clamped by truncate)
-        assert_eq!(cache.reusable_count(6, 80, false, &[], None), 6);
+        assert_eq!(cache.reusable_count(6, 80, false, &[], &no_expanded), 6);
 
         // Case 3: Width changed -> 0 reusable
-        assert_eq!(cache.reusable_count(5, 40, false, &[], None), 0);
+        assert_eq!(cache.reusable_count(5, 40, false, &[], &no_expanded), 0);
 
         // Case 4: Loading (last message is volatile) -> n-1 reusable
         let volatile_items = vec![crate::inference::ContextItem::Message(
@@ -489,8 +542,11 @@ mod tests {
                 content: String::new(),
             },
         )];
-        cache.update_metadata(1, 80, None);
-        assert_eq!(cache.reusable_count(1, 80, true, &volatile_items, None), 0);
+        cache.update_metadata(1, 80, &no_expanded);
+        assert_eq!(
+            cache.reusable_count(1, 80, true, &volatile_items, &no_expanded),
+            0
+        );
 
         // Case 5: Loading (last message is stable) -> n reusable
         let stable_items = vec![crate::inference::ContextItem::Message(
@@ -499,15 +555,19 @@ mod tests {
                 content: String::new(),
             },
         )];
-        cache.update_metadata(1, 80, None);
-        assert_eq!(cache.reusable_count(1, 80, true, &stable_items, None), 1);
+        cache.update_metadata(1, 80, &no_expanded);
+        assert_eq!(
+            cache.reusable_count(1, 80, true, &stable_items, &no_expanded),
+            1
+        );
     }
 
     #[test]
     fn test_volatile_last_message_recalculated_after_loading() {
         let mut cache = LayoutCache::new();
+        let no_expanded = HashSet::new();
         cache.heights = vec![3, 5];
-        cache.update_metadata(2, 80, None);
+        cache.update_metadata(2, 80, &no_expanded);
 
         // Streaming just finished: is_loading=false, but last message is Model.
         // Its cached height may be stale from a partial streaming frame.
@@ -523,7 +583,10 @@ mod tests {
         ];
 
         // Should exclude the volatile last item so its height gets recalculated
-        assert_eq!(cache.reusable_count(2, 80, false, &items, None), 1);
+        assert_eq!(
+            cache.reusable_count(2, 80, false, &items, &no_expanded),
+            1
+        );
 
         // Non-volatile last item (User) should trust the cache fully
         let stable_items = vec![
@@ -536,7 +599,10 @@ mod tests {
                 content: "follow-up".into(),
             }),
         ];
-        assert_eq!(cache.reusable_count(2, 80, false, &stable_items, None), 2);
+        assert_eq!(
+            cache.reusable_count(2, 80, false, &stable_items, &no_expanded),
+            2
+        );
     }
 
     /// Replays the exact sequence that triggers the stale-height bug:
@@ -550,6 +616,7 @@ mod tests {
         use crate::tui::components::message::Message;
 
         let width: u16 = 30;
+        let no_expanded = HashSet::new();
 
         let user_seg = ContextSegment {
             source: Source::User,
@@ -567,7 +634,7 @@ mod tests {
         ];
 
         let mut cache = LayoutCache::new();
-        let reusable = cache.reusable_count(2, width, true, &items_streaming, None);
+        let reusable = cache.reusable_count(2, width, true, &items_streaming, &no_expanded);
         cache.heights.truncate(reusable); // 0 — fresh cache
 
         for item in &items_streaming {
@@ -578,7 +645,7 @@ mod tests {
             cache.heights.push(h);
         }
         cache.rebuild_prefix_heights();
-        cache.update_metadata(2, width, None);
+        cache.update_metadata(2, width, &no_expanded);
 
         let stale_model_height = cache.heights[1];
 
@@ -594,7 +661,7 @@ mod tests {
         ];
 
         // is_loading = false now. The fix should exclude the last volatile item.
-        let reusable = cache.reusable_count(2, width, false, &items_done, None);
+        let reusable = cache.reusable_count(2, width, false, &items_done, &no_expanded);
         assert_eq!(
             reusable, 1,
             "should force recalculation of the volatile last message"
@@ -610,7 +677,7 @@ mod tests {
             cache.heights.push(h);
         }
         cache.rebuild_prefix_heights();
-        cache.update_metadata(2, width, None);
+        cache.update_metadata(2, width, &no_expanded);
 
         let fresh_model_height = cache.heights[1];
 
@@ -623,5 +690,38 @@ mod tests {
         // User message height must be unchanged (was reusable)
         let expected_user_height = Message::calculate_height(&user_seg, width);
         assert_eq!(cache.heights[0], expected_user_height);
+    }
+
+    #[test]
+    fn test_expansion_toggle_invalidates_cache() {
+        let mut cache = LayoutCache::new();
+        let no_expanded = HashSet::new();
+        cache.heights = vec![3, 3, 3];
+        cache.update_metadata(3, 80, &no_expanded);
+
+        let items = vec![
+            crate::inference::ContextItem::Message(crate::inference::ContextSegment {
+                source: Source::User,
+                content: "hello".into(),
+            }),
+            crate::inference::ContextItem::ToolCall(crate::inference::ToolCall {
+                id: "fc_1".into(),
+                call_id: "call_1".into(),
+                name: "add".into(),
+                arguments: "{}".into(),
+            }),
+            crate::inference::ContextItem::Message(crate::inference::ContextSegment {
+                source: Source::Model,
+                content: "done".into(),
+            }),
+        ];
+
+        // Expanding index 1 should invalidate from that index onward
+        let mut expanded = HashSet::new();
+        expanded.insert(1);
+        assert_eq!(
+            cache.reusable_count(3, 80, false, &items, &expanded),
+            1 // Only index 0 reusable; 1 and 2 need recalc
+        );
     }
 }
