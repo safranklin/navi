@@ -4,6 +4,8 @@
 //! - Reasoning support with effort parameter
 //! - Streaming with SSE events
 
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
@@ -77,6 +79,8 @@ struct ResponsesRequest {
     reasoning: Reasoning,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<ApiToolDefinition>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_output_tokens: Option<u32>,
 }
 
 /// SSE event for delta content (used for both text and reasoning)
@@ -117,8 +121,19 @@ struct OutputItemData {
 #[derive(Deserialize, Debug)]
 struct FunctionCallArgsDoneEvent {
     #[serde(default)]
+    item_id: String,
+    #[serde(default)]
     name: String,
     arguments: String,
+}
+
+/// Tracks a tool call across multiple SSE events (added → delta* → done).
+/// Unlike OpenRouter, LM Studio sends argument deltas that must be accumulated.
+struct PendingToolCall {
+    id: String,          // API object ID (e.g. "fc_abc123")
+    call_id: String,     // Correlation ID (e.g. "call_xyz789")
+    name: String,        // Function name
+    args_buffer: String, // Accumulates argument deltas
 }
 
 // ============================================================================
@@ -276,6 +291,7 @@ impl CompletionProvider for LmStudioProvider {
             stream: Some(true),
             reasoning,
             tools: tools_to_api(request.tools),
+            max_output_tokens: Some(16384),
         };
 
         info!(
@@ -294,11 +310,8 @@ impl CompletionProvider for LmStudioProvider {
         let mut chunk_count = 0usize;
         let mut response = response;
 
-        // Tool call buffering state
-        let mut pending_tool_id: Option<String> = None;
-        let mut pending_tool_call_id: Option<String> = None;
-        let mut pending_tool_name: Option<String> = None;
-        let mut pending_tool_args = String::new();
+        // Tool call state: tracks concurrent tool calls by item_id
+        let mut pending_tools: HashMap<String, PendingToolCall> = HashMap::new();
 
         while let Some(chunk) = response
             .chunk()
@@ -384,35 +397,70 @@ impl CompletionProvider for LmStudioProvider {
                                 && event.item.item_type == "function_call"
                             {
                                 debug!(
-                                    "Tool call started: {} (id={}, call_id={})",
+                                    "Tool call started: {} (item_id={}, call_id={})",
                                     event.item.name, event.item.id, event.item.call_id
                                 );
-                                pending_tool_id = Some(event.item.id);
-                                pending_tool_call_id = Some(event.item.call_id);
-                                pending_tool_name = Some(event.item.name);
-                                pending_tool_args.clear();
+                                pending_tools.insert(
+                                    event.item.id.clone(),
+                                    PendingToolCall {
+                                        id: event.item.id,
+                                        call_id: event.item.call_id,
+                                        name: event.item.name,
+                                        args_buffer: String::new(),
+                                    },
+                                );
                             }
                         }
                         Some("response.function_call_arguments.delta") => {
                             if let Ok(event) = serde_json::from_str::<DeltaEvent>(data) {
-                                pending_tool_args.push_str(&event.delta);
+                                // Append to the matching pending tool's args buffer.
+                                // item_id on DeltaEvent may be empty for some LM Studio
+                                // versions, so fall back to single-entry heuristic.
+                                let entry = if !event.item_id.is_empty() {
+                                    pending_tools.get_mut(&event.item_id)
+                                } else {
+                                    pending_tools.values_mut().next()
+                                };
+                                if let Some(pending) = entry {
+                                    pending.args_buffer.push_str(&event.delta);
+                                } else {
+                                    warn!("Argument delta for unknown tool call");
+                                }
                             }
                         }
                         Some("response.function_call_arguments.done") => {
                             if let Ok(event) =
                                 serde_json::from_str::<FunctionCallArgsDoneEvent>(data)
                             {
-                                let call_id = pending_tool_call_id.take().unwrap_or_default();
-                                // LM Studio omits `name` from arguments.done — fall back to
-                                // the name captured during output_item.added.
-                                let name = if event.name.is_empty() {
-                                    pending_tool_name.take().unwrap_or_default()
+                                // Look up by item_id; fall back to single-entry heuristic
+                                // if LM Studio omits item_id.
+                                let pending = if !event.item_id.is_empty() {
+                                    pending_tools.remove(&event.item_id)
                                 } else {
-                                    pending_tool_name = None;
-                                    event.name
+                                    let key = pending_tools.keys().next().cloned();
+                                    key.and_then(|k| pending_tools.remove(&k))
+                                };
+                                let (id, call_id, name) = match pending {
+                                    Some(p) => {
+                                        // LM Studio omits `name` from arguments.done —
+                                        // use the name from output_item.added.
+                                        let name = if event.name.is_empty() {
+                                            p.name
+                                        } else {
+                                            event.name
+                                        };
+                                        (p.id, p.call_id, name)
+                                    }
+                                    None => {
+                                        warn!(
+                                            "arguments.done for unknown item_id: {}, skipping",
+                                            event.item_id
+                                        );
+                                        continue;
+                                    }
                                 };
                                 let tool_call = crate::inference::ToolCall {
-                                    id: pending_tool_id.take().unwrap_or_default(),
+                                    id,
                                     call_id,
                                     name: name.clone(),
                                     arguments: event.arguments,
@@ -421,7 +469,6 @@ impl CompletionProvider for LmStudioProvider {
                                     "Tool call complete: {} (call_id={})",
                                     name, tool_call.call_id
                                 );
-                                pending_tool_args.clear();
                                 chunk_count += 1;
                                 if sender.send(StreamChunk::ToolCall(tool_call)).await.is_err() {
                                     warn!("ToolCall send failed: receiver dropped");
@@ -456,6 +503,13 @@ impl CompletionProvider for LmStudioProvider {
             }
         }
 
+        if !pending_tools.is_empty() {
+            warn!(
+                "Stream ended with {} unresolved tool call(s): {:?}",
+                pending_tools.len(),
+                pending_tools.keys().collect::<Vec<_>>()
+            );
+        }
         info!(
             "Stream ended: {} chunks processed, {} total content bytes",
             chunk_count, total_content_len
@@ -595,6 +649,7 @@ mod tests {
             stream: None,
             reasoning: effort_to_reasoning(Effort::Auto),
             tools: None,
+            max_output_tokens: None,
         };
 
         let json = serde_json::to_string(&request).unwrap();
@@ -612,6 +667,7 @@ mod tests {
             stream: Some(true),
             reasoning: effort_to_reasoning(Effort::Medium),
             tools: None,
+            max_output_tokens: None,
         };
 
         let json = serde_json::to_string(&request).unwrap();

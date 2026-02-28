@@ -81,6 +81,8 @@ struct ResponsesRequest {
     reasoning: Reasoning,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<ApiToolDefinition>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_output_tokens: Option<u32>,
 }
 
 /// Generic SSE event wrapper to extract the type field
@@ -308,6 +310,7 @@ impl CompletionProvider for OpenRouterProvider {
             stream: Some(true),
             reasoning,
             tools: tools_to_api(request.tools),
+            max_output_tokens: Some(16384),
         };
 
         info!(
@@ -639,6 +642,7 @@ mod tests {
             stream: None,
             reasoning: effort_to_reasoning(Effort::Auto),
             tools: None,
+            max_output_tokens: None,
         };
 
         let json = serde_json::to_string(&request).unwrap();
@@ -656,6 +660,7 @@ mod tests {
             stream: Some(true),
             reasoning: effort_to_reasoning(Effort::High),
             tools: None,
+            max_output_tokens: None,
         };
 
         let json = serde_json::to_string(&request).unwrap();
@@ -671,6 +676,7 @@ mod tests {
             stream: Some(true),
             reasoning: effort_to_reasoning(Effort::None),
             tools: None,
+            max_output_tokens: None,
         };
 
         let json = serde_json::to_string(&request).unwrap();
