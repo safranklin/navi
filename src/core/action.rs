@@ -42,6 +42,8 @@ pub enum Action {
         call_id: String,
         output: String,
     },
+    // User cancelled the in-progress generation
+    CancelGeneration,
 }
 
 #[derive(Debug, PartialEq)]
@@ -51,6 +53,52 @@ pub enum Effect {
     Quit,
     SpawnRequest,
     ExecuteTool(ToolCall), // Run a tool asynchronously
+}
+
+/// Checks whether the current agentic round is fully complete (stream finished
+/// AND all tool results received). Called by both `ResponseDone` and `ToolResultReady`.
+///
+/// This two-sided gate prevents the race where a fast tool result arrives before
+/// the stream has finished sending all tool calls, which would prematurely fire
+/// `SpawnRequest` and re-enter the agentic loop with incomplete context.
+fn check_round_complete(app_state: &mut App) -> Effect {
+    if app_state.stream_done && app_state.pending_tool_calls.is_empty() {
+        if app_state.had_tool_calls {
+            // Tool-calling round complete — advance the agentic loop
+            app_state.agentic_rounds += 1;
+            if app_state.agentic_rounds > MAX_AGENTIC_ROUNDS {
+                warn!("Agentic loop limit reached ({} rounds)", MAX_AGENTIC_ROUNDS);
+                app_state.is_loading = false;
+                app_state.error = Some(format!(
+                    "Agentic loop stopped after {} rounds. The model may be stuck in a tool-calling loop.",
+                    MAX_AGENTIC_ROUNDS
+                ));
+                app_state.status_message = String::from("Loop limit reached.");
+                app_state.stream_done = false;
+                app_state.had_tool_calls = false;
+                Effect::Render
+            } else {
+                app_state.status_message = String::from("Resuming...");
+                app_state.stream_done = false;
+                app_state.had_tool_calls = false;
+                Effect::SpawnRequest
+            }
+        } else {
+            // Pure text response — no tools were called
+            app_state.is_loading = false;
+            app_state.status_message = String::from("Response complete.");
+            Effect::Render
+        }
+    } else if !app_state.pending_tool_calls.is_empty() {
+        app_state.status_message = format!(
+            "Waiting for {} more tool(s)...",
+            app_state.pending_tool_calls.len()
+        );
+        Effect::Render
+    } else {
+        // Stream not done yet, or tools still pending — keep waiting
+        Effect::Render
+    }
 }
 
 pub fn update(app_state: &mut App, action: Action) -> Effect {
@@ -63,6 +111,8 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
             app_state.context.add_user_message(message);
             app_state.is_loading = true;
             app_state.agentic_rounds = 0;
+            app_state.stream_done = false;
+            app_state.had_tool_calls = false;
             app_state.status_message = String::from("Loading...");
             Effect::SpawnRequest
         }
@@ -93,17 +143,13 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
         }
         Action::ResponseDone => {
             app_state.context.clear_active_streams();
+            app_state.stream_done = true;
             if let Some(crate::inference::ContextItem::Message(last)) =
                 app_state.context.items.last()
             {
                 debug!("ResponseDone: final message length={}", last.content.len());
             }
-            if app_state.pending_tool_calls.is_empty() {
-                app_state.is_loading = false;
-                app_state.status_message = String::from("Response complete.");
-            }
-            // If tools are pending, stay loading — the agentic loop continues
-            Effect::Render
+            check_round_complete(app_state)
         }
         Action::ToolCallReceived(tool_call) => {
             if tool_call.call_id.is_empty() {
@@ -113,6 +159,7 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
                 );
                 return Effect::Render;
             }
+            app_state.had_tool_calls = true;
             app_state
                 .pending_tool_calls
                 .insert(tool_call.call_id.clone());
@@ -125,29 +172,16 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
             app_state
                 .context
                 .add_tool_result(ToolResult { call_id, output });
-
-            if app_state.pending_tool_calls.is_empty() {
-                app_state.agentic_rounds += 1;
-                if app_state.agentic_rounds > MAX_AGENTIC_ROUNDS {
-                    warn!("Agentic loop limit reached ({} rounds)", MAX_AGENTIC_ROUNDS);
-                    app_state.is_loading = false;
-                    app_state.error = Some(format!(
-                        "Agentic loop stopped after {} rounds. The model may be stuck in a tool-calling loop.",
-                        MAX_AGENTIC_ROUNDS
-                    ));
-                    app_state.status_message = String::from("Loop limit reached.");
-                    Effect::Render
-                } else {
-                    app_state.status_message = String::from("Resuming...");
-                    Effect::SpawnRequest
-                }
-            } else {
-                app_state.status_message = format!(
-                    "Waiting for {} more tool(s)...",
-                    app_state.pending_tool_calls.len()
-                );
-                Effect::Render
-            }
+            check_round_complete(app_state)
+        }
+        Action::CancelGeneration => {
+            app_state.is_loading = false;
+            app_state.pending_tool_calls.clear();
+            app_state.stream_done = false;
+            app_state.had_tool_calls = false;
+            app_state.context.clear_active_streams();
+            app_state.status_message = String::from("Cancelled.");
+            Effect::Render
         }
     }
 }
@@ -253,6 +287,8 @@ mod tests {
     fn test_tool_result_ready_last_tool_spawns_request() {
         let mut app = test_app();
         app.is_loading = true;
+        app.had_tool_calls = true;
+        app.stream_done = true; // stream already finished
         app.pending_tool_calls.insert("call_1".to_string());
 
         let effect = update(
@@ -271,6 +307,8 @@ mod tests {
     fn test_tool_result_ready_with_remaining_tools_renders() {
         let mut app = test_app();
         app.is_loading = true;
+        app.had_tool_calls = true;
+        app.stream_done = true;
         app.pending_tool_calls.insert("call_1".to_string());
         app.pending_tool_calls.insert("call_2".to_string());
 
@@ -308,6 +346,8 @@ mod tests {
 
         let mut app = test_app();
         app.is_loading = true;
+        app.had_tool_calls = true;
+        app.stream_done = true;
         app.agentic_rounds = MAX_AGENTIC_ROUNDS;
         app.pending_tool_calls.insert("call_1".to_string());
 
@@ -339,12 +379,72 @@ mod tests {
     fn test_response_done_stays_loading_when_tools_pending() {
         let mut app = test_app();
         app.is_loading = true;
+        app.had_tool_calls = true;
         app.pending_tool_calls.insert("call_1".to_string());
 
         let effect = update(&mut app, Action::ResponseDone);
 
         assert!(app.is_loading); // Still loading — tools not done yet
+        assert!(app.stream_done);
         assert_eq!(effect, Effect::Render);
     }
 
+    /// Regression test: tool result arrives BEFORE the stream finishes sending
+    /// all tool calls. Previously this would fire SpawnRequest prematurely.
+    #[test]
+    fn test_tool_result_before_stream_done_does_not_spawn() {
+        let mut app = test_app();
+        app.is_loading = true;
+
+        // Stream sends first tool call
+        let tc1 = make_tool_call("add", "call_1");
+        let effect = update(&mut app, Action::ToolCallReceived(tc1));
+        assert!(matches!(effect, Effect::ExecuteTool(_)));
+        assert!(app.had_tool_calls);
+
+        // Tool executes fast and returns before stream is done
+        let effect = update(
+            &mut app,
+            Action::ToolResultReady {
+                call_id: "call_1".to_string(),
+                output: r#"{"result": 3}"#.to_string(),
+            },
+        );
+        // Should NOT fire SpawnRequest — stream_done is still false
+        assert_eq!(effect, Effect::Render);
+        assert!(app.is_loading);
+
+        // Stream sends second tool call
+        let tc2 = make_tool_call("subtract", "call_2");
+        let effect = update(&mut app, Action::ToolCallReceived(tc2));
+        assert!(matches!(effect, Effect::ExecuteTool(_)));
+
+        // Stream finishes — but call_2 is still pending
+        let effect = update(&mut app, Action::ResponseDone);
+        assert_eq!(effect, Effect::Render);
+        assert!(app.is_loading);
+
+        // Second tool completes — NOW we can spawn
+        let effect = update(
+            &mut app,
+            Action::ToolResultReady {
+                call_id: "call_2".to_string(),
+                output: r#"{"result": 1}"#.to_string(),
+            },
+        );
+        assert_eq!(effect, Effect::SpawnRequest);
+    }
+
+    #[test]
+    fn test_submit_resets_stream_flags() {
+        let mut app = test_app();
+        app.stream_done = true;
+        app.had_tool_calls = true;
+
+        update(&mut app, Action::Submit("hello".to_string()));
+
+        assert!(!app.stream_done);
+        assert!(!app.had_tool_calls);
+        assert_eq!(app.agentic_rounds, 0);
+    }
 }

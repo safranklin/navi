@@ -136,6 +136,9 @@ pub fn run(provider_choice: Provider) -> std::io::Result<()> {
     // Channel for actions from background tasks
     let (tx, rx) = mpsc::channel();
 
+    // Abort handles for the current generation (used by Escape-to-cancel)
+    let mut active_abort_handles: Vec<tokio::task::AbortHandle> = Vec::new();
+
     // Animation timer
     let start_time = std::time::Instant::now();
     let mut needs_redraw = true; // Force first frame
@@ -251,6 +254,17 @@ pub fn run(provider_choice: Provider) -> std::io::Result<()> {
             // Modal event dispatch
             match tui.input_mode {
                 InputMode::Input => {
+                    // Esc while loading → cancel generation
+                    if matches!(event, TuiEvent::Escape) && app.is_loading {
+                        for handle in active_abort_handles.drain(..) {
+                            handle.abort();
+                        }
+                        let effect = update(&mut app, Action::CancelGeneration);
+                        if effect == Effect::Quit {
+                            should_quit = true;
+                        }
+                        continue;
+                    }
                     // Esc → switch to Cursor mode
                     if matches!(event, TuiEvent::Escape) {
                         tui.input_mode = InputMode::Cursor;
@@ -278,7 +292,8 @@ pub fn run(provider_choice: Provider) -> std::io::Result<()> {
                                 if !app.is_loading {
                                     let effect = update(&mut app, Action::Submit(text));
                                     if effect == Effect::SpawnRequest {
-                                        spawn_request(&app, tx.clone());
+                                        active_abort_handles =
+                                            spawn_request(&app, tx.clone());
                                     }
                                 }
                             }
@@ -292,6 +307,16 @@ pub fn run(provider_choice: Provider) -> std::io::Result<()> {
                 }
                 InputMode::Cursor => {
                     match event {
+                        // Esc while loading → cancel generation
+                        TuiEvent::Escape if app.is_loading => {
+                            for handle in active_abort_handles.drain(..) {
+                                handle.abort();
+                            }
+                            let effect = update(&mut app, Action::CancelGeneration);
+                            if effect == Effect::Quit {
+                                should_quit = true;
+                            }
+                        }
                         // Esc in Cursor mode is a no-op
                         TuiEvent::Escape => {}
                         // Space toggles expansion of selected tool call
@@ -378,7 +403,7 @@ pub fn run(provider_choice: Provider) -> std::io::Result<()> {
             match effect {
                 Effect::Quit => break,
                 Effect::SpawnRequest => {
-                    spawn_request(&app, tx.clone());
+                    active_abort_handles = spawn_request(&app, tx.clone());
                 }
                 Effect::ExecuteTool(tool_call) => {
                     spawn_tool_execution(tool_call, app.registry.clone(), tx.clone());
@@ -431,7 +456,7 @@ fn spawn_tool_execution(
     });
 }
 
-fn spawn_request(app: &App, tx: mpsc::Sender<Action>) {
+fn spawn_request(app: &App, tx: mpsc::Sender<Action>) -> Vec<tokio::task::AbortHandle> {
     info!("Spawning API request");
 
     // Clone what we need for the async task
@@ -448,7 +473,7 @@ fn spawn_request(app: &App, tx: mpsc::Sender<Action>) {
     let tx_stream = tx.clone();
 
     // Spawn the provider streaming task
-    tokio::spawn(async move {
+    let stream_handle = tokio::spawn(async move {
         let request = CompletionRequest {
             context: &context,
             model: &model,
@@ -471,7 +496,7 @@ fn spawn_request(app: &App, tx: mpsc::Sender<Action>) {
     });
 
     // Spawn a task to forward chunks to the Action channel
-    tokio::spawn(async move {
+    let forward_handle = tokio::spawn(async move {
         let mut forwarded_count = 0usize;
         let mut total_content_len = 0usize;
 
@@ -518,4 +543,6 @@ fn spawn_request(app: &App, tx: mpsc::Sender<Action>) {
             warn!("Failed to send ResponseDone: receiver dropped");
         }
     });
+
+    vec![stream_handle.abort_handle(), forward_handle.abort_handle()]
 }
