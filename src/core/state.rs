@@ -15,7 +15,8 @@
 //! ├── registry: Arc<ToolRegistry>   // tool registry
 //! ├── pending_tool_calls: HashSet   // call_ids awaiting results
 //! ├── agentic_rounds: u8           // loop iteration counter
-//! └── agentic_rounds: u8           // loop iteration counter
+//! ├── stream_done: bool            // SSE stream finished
+//! └── had_tool_calls: bool         // tool calls received this round
 //! ```
 //!
 //! State changes only happen through `update(state, action)` in action.rs.
@@ -40,6 +41,10 @@ pub struct App {
     pub registry: Arc<ToolRegistry>,
     pub pending_tool_calls: HashSet<String>, // call_ids awaiting results
     pub agentic_rounds: u8,
+    /// True after `ResponseDone` — the SSE stream has finished sending events.
+    pub stream_done: bool,
+    /// True if any `ToolCallReceived` arrived this round.
+    pub had_tool_calls: bool,
 }
 
 impl App {
@@ -55,6 +60,8 @@ impl App {
             registry: Arc::new(crate::core::tools::default_registry()),
             pending_tool_calls: HashSet::new(),
             agentic_rounds: 0,
+            stream_done: false,
+            had_tool_calls: false,
         }
     }
 
