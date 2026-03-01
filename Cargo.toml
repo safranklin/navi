@@ -19,6 +19,8 @@ log = "0.4"
 simplelog = "0.12"
 clap = { version = "4", features = ["derive"] }
 textwrap = "0.16.2"
+pulldown-cmark = "0.13"
+syntect = "5.3"
 unicode-width = "0.2"
 
 [dev-dependencies]

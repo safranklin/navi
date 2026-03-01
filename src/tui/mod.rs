@@ -22,6 +22,7 @@
 mod component;
 mod components;
 mod event;
+pub mod markdown;
 mod ui;
 
 use log::{debug, info, warn};

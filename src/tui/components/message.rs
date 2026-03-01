@@ -1,6 +1,7 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::Text;
 use ratatui::widgets::{Block, Padding, Paragraph, Widget, Wrap};
 
 use crate::inference::{ContextSegment, Source, UsageStats};
@@ -39,7 +40,7 @@ const PULSE_NORMAL_THRESHOLD: f32 = 0.2;
 /// # Height Calculation
 ///
 /// The [`calculate_height`](Self::calculate_height) method predicts rendered height
-/// using `textwrap` with options that match Ratatui's `Paragraph` wrapping behavior.
+/// using `Paragraph::line_count` on the same styled content used for rendering.
 /// This enables the parent `MessageList` to calculate scroll positions without
 /// actually rendering each message.
 #[derive(Clone, Copy)]
@@ -74,19 +75,11 @@ impl<'a> Message<'a> {
 
     /// Calculate the height required for this message given a width.
     ///
-    /// # Architecture Note
-    ///
-    /// We use `textwrap` here to accurately predict the height of the message
-    /// *without* rendering it. This avoids a circular dependency where we need
-    /// the height to create the ScrollView, but need to render to get the height.
-    ///
-    /// The wrapping options must match the `Ratatui` default for `Paragraph`
-    /// to ensure 1:1 mapping between calculated and actual height.
+    /// Uses `Paragraph::line_count` to predict height from the same styled
+    /// content we'd actually render — no separate wrapping library to keep in sync.
     pub fn calculate_height(segment: &ContextSegment, width: u16) -> u16 {
         let content_width = width.saturating_sub(HORIZONTAL_OVERHEAD);
         if content_width == 0 {
-            // Degenerate case: terminal too narrow for borders + padding.
-            // Return 1 row so the message still occupies space in the layout.
             return 1;
         }
 
@@ -95,13 +88,43 @@ impl<'a> Message<'a> {
             return VERTICAL_OVERHEAD;
         }
 
-        let options = textwrap::Options::new(content_width as usize)
-            .break_words(true)
-            .word_separator(textwrap::WordSeparator::AsciiSpace);
+        let paragraph = build_paragraph(content, &segment.source);
+        let lines = paragraph.line_count(content_width) as u16;
+        lines.max(1) + VERTICAL_OVERHEAD
+    }
+}
 
-        let lines = textwrap::wrap(content, options);
-        // Ensure at least 1 content line even if textwrap returns empty
-        (lines.len() as u16).max(1) + VERTICAL_OVERHEAD
+/// Build the paragraph for a message — markdown for User/Model, plain for others.
+fn build_paragraph<'a>(content: &'a str, source: &Source) -> Paragraph<'a> {
+    match source {
+        Source::User | Source::Model => {
+            let base_fg = match source {
+                Source::User => Color::Green,
+                Source::Model => Color::Blue,
+                _ => unreachable!(),
+            };
+            let text = crate::tui::markdown::render(content, base_fg);
+            // trim: false to preserve indentation in code blocks
+            Paragraph::new(text).wrap(Wrap { trim: false })
+        }
+        _ => {
+            let style = source_style(source);
+            Paragraph::new(Text::raw(content))
+                .style(style)
+                .wrap(Wrap { trim: true })
+        }
+    }
+}
+
+/// Get the base style for a message source.
+fn source_style(source: &Source) -> Style {
+    match source {
+        Source::Directive => Style::default().fg(Color::Yellow),
+        Source::User => Style::default().fg(Color::Green),
+        Source::Model => Style::default().fg(Color::Blue),
+        Source::Thinking | Source::Status => Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::ITALIC),
     }
 }
 
@@ -116,17 +139,7 @@ impl<'a> Widget for Message<'a> {
             Source::Status => "navi",
         };
 
-        let style = match self.segment.source {
-            Source::Directive => Style::default().fg(Color::Yellow),
-            Source::User => Style::default().fg(Color::Green),
-            Source::Model => Style::default().fg(Color::Blue),
-            Source::Thinking => Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::ITALIC),
-            Source::Status => Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::ITALIC),
-        };
+        let style = source_style(&self.segment.source);
 
         // Selected = source color at normal brightness (lightened from default dim)
         let mut border_style = if self.is_selected {
@@ -171,10 +184,7 @@ impl<'a> Widget for Message<'a> {
         let inner_area = block.inner(area);
         block.render(area, buf);
 
-        let paragraph = Paragraph::new(content)
-            .style(style)
-            .wrap(Wrap { trim: true });
-
+        let paragraph = build_paragraph(content, &self.segment.source);
         paragraph.render(inner_area, buf);
     }
 }
@@ -210,35 +220,30 @@ mod tests {
     #[test]
     fn calculate_height_empty_content_returns_border_height() {
         let segment = make_segment(Source::User, "");
-        // Empty content → just VERTICAL_OVERHEAD (top + bottom borders)
         assert_eq!(Message::calculate_height(&segment, 80), VERTICAL_OVERHEAD);
     }
 
     #[test]
     fn calculate_height_whitespace_only_treated_as_empty() {
         let segment = make_segment(Source::User, "   \n\t  ");
-        // Whitespace-only content is trimmed to empty → VERTICAL_OVERHEAD
         assert_eq!(Message::calculate_height(&segment, 80), VERTICAL_OVERHEAD);
     }
 
     #[test]
     fn calculate_height_zero_width_returns_minimum() {
         let segment = make_segment(Source::User, "Hello world");
-        // Width 0: no room for borders + padding → degenerate fallback of 1 row
         assert_eq!(Message::calculate_height(&segment, 0), 1);
     }
 
     #[test]
     fn calculate_height_width_equals_overhead_returns_minimum() {
         let segment = make_segment(Source::User, "Hello world");
-        // Width == HORIZONTAL_OVERHEAD: content_width = 0 → degenerate fallback
         assert_eq!(Message::calculate_height(&segment, HORIZONTAL_OVERHEAD), 1);
     }
 
     #[test]
     fn calculate_height_single_line_fits() {
         let segment = make_segment(Source::User, "Hello");
-        // "Hello" (5 chars) fits in width 80 - HORIZONTAL_OVERHEAD = 76
         assert_eq!(
             Message::calculate_height(&segment, 80),
             1 + VERTICAL_OVERHEAD
@@ -246,69 +251,64 @@ mod tests {
     }
 
     #[test]
-    fn calculate_height_wraps_at_width_boundary() {
-        let segment = make_segment(Source::User, "Hello world");
-        // "Hello world" = 11 chars, width 9 → content_width = 5
-        // Wraps to: "Hello" | "world" = 2 lines
+    fn calculate_height_thinking_uses_plain_text() {
+        let segment = make_segment(Source::Thinking, "just thinking...");
+        // Plain text, no markdown parsing — should be 1 line + overhead
         assert_eq!(
-            Message::calculate_height(&segment, 9),
-            2 + VERTICAL_OVERHEAD
+            Message::calculate_height(&segment, 80),
+            1 + VERTICAL_OVERHEAD
         );
     }
 
     #[test]
-    fn calculate_height_breaks_long_words() {
-        let segment = make_segment(Source::User, "abcdefghij");
-        // "abcdefghij" = 10 chars, width 8 → content_width = 4
-        // Breaks to: "abcd" | "efgh" | "ij" = 3 lines
-        assert_eq!(
-            Message::calculate_height(&segment, 8),
-            3 + VERTICAL_OVERHEAD
+    fn calculate_height_markdown_heading() {
+        let segment = make_segment(Source::Model, "# Big Title\n\nSome body text");
+        let height = Message::calculate_height(&segment, 80);
+        // Heading + blank line + body = at least 3 content lines + overhead
+        assert!(
+            height >= 3 + VERTICAL_OVERHEAD,
+            "expected >= {}, got {}",
+            3 + VERTICAL_OVERHEAD,
+            height
+        );
+    }
+
+    #[test]
+    fn calculate_height_code_block_preserves_lines() {
+        let segment = make_segment(Source::Model, "```\nline1\nline2\nline3\n```");
+        let height = Message::calculate_height(&segment, 80);
+        // 3 code lines at minimum + overhead (fences may add more)
+        assert!(
+            height >= 3 + VERTICAL_OVERHEAD,
+            "expected >= {}, got {}",
+            3 + VERTICAL_OVERHEAD,
+            height
         );
     }
 
     // ==========================================================================
-    // Style tests - verify each Source variant gets correct styling
+    // Style tests
     // ==========================================================================
 
     #[test]
     fn style_user_is_green() {
-        let segment = make_segment(Source::User, "test");
-        let style = get_source_style(&segment.source);
-        assert_eq!(style.fg, Some(Color::Green));
+        assert_eq!(source_style(&Source::User).fg, Some(Color::Green));
     }
 
     #[test]
     fn style_model_is_blue() {
-        let segment = make_segment(Source::Model, "test");
-        let style = get_source_style(&segment.source);
-        assert_eq!(style.fg, Some(Color::Blue));
+        assert_eq!(source_style(&Source::Model).fg, Some(Color::Blue));
     }
 
     #[test]
     fn style_directive_is_yellow() {
-        let segment = make_segment(Source::Directive, "test");
-        let style = get_source_style(&segment.source);
-        assert_eq!(style.fg, Some(Color::Yellow));
+        assert_eq!(source_style(&Source::Directive).fg, Some(Color::Yellow));
     }
 
     #[test]
     fn style_thinking_is_dark_gray_italic() {
-        let segment = make_segment(Source::Thinking, "test");
-        let style = get_source_style(&segment.source);
+        let style = source_style(&Source::Thinking);
         assert_eq!(style.fg, Some(Color::DarkGray));
         assert!(style.add_modifier.contains(Modifier::ITALIC));
-    }
-
-    /// Helper to extract style for a given source (mirrors Widget impl logic)
-    fn get_source_style(source: &Source) -> Style {
-        match source {
-            Source::Directive => Style::default().fg(Color::Yellow),
-            Source::User => Style::default().fg(Color::Green),
-            Source::Model => Style::default().fg(Color::Blue),
-            Source::Thinking | Source::Status => Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::ITALIC),
-        }
     }
 }
