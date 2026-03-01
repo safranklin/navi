@@ -6,7 +6,9 @@
 
 use std::sync::LazyLock;
 
-use pulldown_cmark::{CodeBlockKind, CowStr, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{
+    Alignment, CodeBlockKind, CowStr, Event, HeadingLevel, Options, Parser, Tag, TagEnd,
+};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use syntect::easy::HighlightLines;
@@ -24,6 +26,7 @@ pub fn render(content: &str, base_fg: Color) -> Text<'static> {
     let mut opts = Options::empty();
     opts.insert(Options::ENABLE_STRIKETHROUGH);
     opts.insert(Options::ENABLE_TASKLISTS);
+    opts.insert(Options::ENABLE_TABLES);
 
     let events: Vec<Event<'_>> = Parser::new_ext(content, opts).collect();
     let mut w = Writer::new(base_fg);
@@ -34,6 +37,17 @@ pub fn render(content: &str, base_fg: Color) -> Text<'static> {
 }
 
 // ── Writer ──────────────────────────────────────────────────────────────────
+
+/// Buffered table state — collects all rows/cells, then renders on close.
+struct TableState {
+    alignments: Vec<Alignment>,
+    /// All rows: header row(s) first, then data rows.
+    rows: Vec<Vec<Vec<Span<'static>>>>,
+    current_row: Vec<Vec<Span<'static>>>,
+    current_cell: Vec<Span<'static>>,
+    /// Number of header rows (always 1 in standard markdown).
+    header_len: usize,
+}
 
 struct Writer {
     text: Text<'static>,
@@ -53,6 +67,8 @@ struct Writer {
     link_url: Option<String>,
     /// Whether the next block element should be preceded by a blank line.
     needs_newline: bool,
+    /// Active table being buffered — `None` when not inside a table.
+    table: Option<TableState>,
 }
 
 impl Writer {
@@ -67,6 +83,7 @@ impl Writer {
             in_plain_code: false,
             link_url: None,
             needs_newline: false,
+            table: None,
         }
     }
 
@@ -100,6 +117,11 @@ impl Writer {
     }
 
     fn push_span(&mut self, span: Span<'static>) {
+        // Inside a table: buffer into the current cell instead of emitting.
+        if let Some(table) = &mut self.table {
+            table.current_cell.push(span);
+            return;
+        }
         if let Some(line) = self.text.lines.last_mut() {
             line.push_span(span);
         } else {
@@ -112,6 +134,99 @@ impl Writer {
             self.push_line(Line::default());
             self.needs_newline = false;
         }
+    }
+
+    // ── Table rendering ──────────────────────────────────────────────────
+
+    fn render_table(&mut self, table: TableState) {
+        let bs = Style::default().fg(Color::DarkGray);
+        let num_cols = table.alignments.len();
+
+        // Column widths: max content width per column (minimum 1).
+        let mut col_widths = vec![1usize; num_cols];
+        for row in &table.rows {
+            for (i, cell) in row.iter().enumerate() {
+                if i < num_cols {
+                    let w = Line::from(cell.clone()).width();
+                    col_widths[i] = col_widths[i].max(w);
+                }
+            }
+        }
+
+        // Top border: ┌────┬────┐
+        self.push_line(self.table_border(&col_widths, "┌", "┬", "┐", bs));
+
+        for (row_idx, row) in table.rows.iter().enumerate() {
+            // Data row: │ cell │ cell │
+            let mut spans = vec![Span::styled("│ ", bs)];
+            for (i, &col_w) in col_widths.iter().enumerate() {
+                let cell = row.get(i).cloned().unwrap_or_default();
+                let cell_width = Line::from(cell.clone()).width();
+                let padding = col_w.saturating_sub(cell_width);
+
+                let align = table
+                    .alignments
+                    .get(i)
+                    .copied()
+                    .unwrap_or(Alignment::None);
+                let (lpad, rpad) = match align {
+                    Alignment::Right => (padding, 0),
+                    Alignment::Center => (padding / 2, padding - padding / 2),
+                    _ => (0, padding),
+                };
+
+                if lpad > 0 {
+                    spans.push(Span::raw(" ".repeat(lpad)));
+                }
+                if row_idx < table.header_len {
+                    // Header cells rendered bold.
+                    for s in &cell {
+                        spans.push(Span::styled(
+                            s.content.clone(),
+                            s.style.add_modifier(Modifier::BOLD),
+                        ));
+                    }
+                } else {
+                    spans.extend(cell);
+                }
+                if rpad > 0 {
+                    spans.push(Span::raw(" ".repeat(rpad)));
+                }
+                if i < num_cols - 1 {
+                    spans.push(Span::styled(" │ ", bs));
+                }
+            }
+            spans.push(Span::styled(" │", bs));
+            self.push_line(Line::from(spans));
+
+            // Header separator: ├────┼────┤
+            if row_idx < table.header_len {
+                self.push_line(self.table_border(&col_widths, "├", "┼", "┤", bs));
+            }
+        }
+
+        // Bottom border: └────┴────┘
+        self.push_line(self.table_border(&col_widths, "└", "┴", "┘", bs));
+    }
+
+    /// Build a horizontal table border line: `left──sep──right`.
+    fn table_border(
+        &self,
+        col_widths: &[usize],
+        left: &str,
+        sep: &str,
+        right: &str,
+        style: Style,
+    ) -> Line<'static> {
+        let mut spans = vec![Span::styled(left.to_owned(), style)];
+        for (i, &w) in col_widths.iter().enumerate() {
+            spans.push(Span::styled("─".repeat(w + 2), style));
+            if i < col_widths.len() - 1 {
+                spans.push(Span::styled(sep.to_owned(), style));
+            }
+        }
+        spans.push(Span::styled(right.to_owned(), style));
+        Line::from(spans)
     }
 
     // ── Event dispatch ──────────────────────────────────────────────────
@@ -251,7 +366,23 @@ impl Writer {
                         .add_modifier(Modifier::UNDERLINED),
                 );
             }
-            _ => {} // Tables, images, definitions — skip
+            Tag::Table(alignments) => {
+                self.blank_line_if_needed();
+                self.table = Some(TableState {
+                    alignments: alignments.to_vec(),
+                    rows: vec![],
+                    current_row: vec![],
+                    current_cell: vec![],
+                    header_len: 0,
+                });
+            }
+            Tag::TableHead | Tag::TableRow => {}
+            Tag::TableCell => {
+                if let Some(table) = &mut self.table {
+                    table.current_cell = vec![];
+                }
+            }
+            _ => {} // Images, definitions — skip
         }
     }
 
@@ -274,6 +405,31 @@ impl Writer {
                 let bs = Style::default().fg(Color::DarkGray);
                 self.push_line(Line::from(Span::styled("╰──", bs)));
                 self.needs_newline = true;
+            }
+            TagEnd::Table => {
+                if let Some(table) = self.table.take() {
+                    self.render_table(table);
+                }
+                self.needs_newline = true;
+            }
+            TagEnd::TableHead => {
+                if let Some(table) = &mut self.table {
+                    let row = std::mem::take(&mut table.current_row);
+                    table.header_len = 1;
+                    table.rows.push(row);
+                }
+            }
+            TagEnd::TableRow => {
+                if let Some(table) = &mut self.table {
+                    let row = std::mem::take(&mut table.current_row);
+                    table.rows.push(row);
+                }
+            }
+            TagEnd::TableCell => {
+                if let Some(table) = &mut self.table {
+                    let cell = std::mem::take(&mut table.current_cell);
+                    table.current_row.push(cell);
+                }
             }
             TagEnd::List(_) => {
                 self.list_indices.pop();
@@ -448,6 +604,58 @@ mod tests {
         let line = &text.lines[0];
         let span = &line.spans[0];
         assert_eq!(span.style.fg, Some(Color::Green));
+    }
+
+    #[test]
+    fn table_renders_with_borders() {
+        let md = "| Name | Age |\n|------|-----|\n| Alice | 30 |\n| Bob | 25 |";
+        let text = render(md, Color::Blue);
+        let lines: Vec<String> = text
+            .lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+            .collect();
+        // Top border
+        assert!(lines[0].contains('┌'), "expected top border: {:?}", lines[0]);
+        assert!(lines[0].contains('┬'), "expected column separator: {:?}", lines[0]);
+        assert!(lines[0].contains('┐'), "expected top-right: {:?}", lines[0]);
+        // Header row
+        assert!(lines[1].contains("Name"), "header should contain Name: {:?}", lines[1]);
+        assert!(lines[1].contains("Age"), "header should contain Age: {:?}", lines[1]);
+        // Header separator
+        assert!(lines[2].contains('├'), "expected header separator: {:?}", lines[2]);
+        // Data rows
+        assert!(lines[3].contains("Alice"), "row should contain Alice: {:?}", lines[3]);
+        assert!(lines[4].contains("Bob"), "row should contain Bob: {:?}", lines[4]);
+        // Bottom border
+        let last = lines.last().unwrap();
+        assert!(last.contains('└'), "expected bottom border: {:?}", last);
+    }
+
+    #[test]
+    fn table_header_is_bold() {
+        let md = "| H1 | H2 |\n|---|---|\n| a | b |";
+        let text = render(md, Color::Blue);
+        // Line 1 is the header data row (line 0 is top border)
+        let header_line = &text.lines[1];
+        let h1_span = header_line.spans.iter().find(|s| s.content.as_ref() == "H1").unwrap();
+        assert!(h1_span.style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn table_with_inline_styles() {
+        let md = "| A | B |\n|---|---|\n| **bold** | `code` |";
+        let text = render(md, Color::Blue);
+        // Find the bold span in a data row
+        let bold_span = text.lines.iter().flat_map(|l| &l.spans)
+            .find(|s| s.content.as_ref() == "bold");
+        assert!(bold_span.is_some(), "should contain 'bold' span");
+        assert!(bold_span.unwrap().style.add_modifier.contains(Modifier::BOLD));
+        // Find the code span
+        let code_span = text.lines.iter().flat_map(|l| &l.spans)
+            .find(|s| s.content.as_ref() == "code");
+        assert!(code_span.is_some(), "should contain 'code' span");
+        assert_eq!(code_span.unwrap().style.bg, Some(Color::DarkGray));
     }
 
     #[test]
