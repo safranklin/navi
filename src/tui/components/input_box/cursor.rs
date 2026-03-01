@@ -32,10 +32,7 @@ fn line_index_for_pos(starts: &[usize], pos: usize) -> usize {
 /// Trimming those gives back the actual content length.
 fn line_content_len(starts: &[usize], line_idx: usize, buffer: &str) -> usize {
     let start = starts[line_idx];
-    let end = starts
-        .get(line_idx + 1)
-        .copied()
-        .unwrap_or(buffer.len());
+    let end = starts.get(line_idx + 1).copied().unwrap_or(buffer.len());
     buffer[start..end].trim_end_matches([' ', '\n']).len()
 }
 

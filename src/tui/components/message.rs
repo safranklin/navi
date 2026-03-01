@@ -3,7 +3,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Padding, Paragraph, Widget, Wrap};
 
-use crate::inference::{ContextSegment, Source};
+use crate::inference::{ContextSegment, Source, UsageStats};
 use crate::tui::component::Component;
 
 /// Horizontal padding (per side) between the border and text content.
@@ -50,17 +50,25 @@ pub struct Message<'a> {
     pub is_selected: bool,
     /// Current pulse intensity (0.0 to 1.0) for active generation animation
     pub pulse_intensity: f32,
+    /// Optional usage stats to display on the bottom border
+    pub stats: Option<&'a UsageStats>,
 }
 
 impl<'a> Message<'a> {
     /// Creates a new Message component for rendering.
     ///
     /// This is typically called within `MessageList::render()` for each visible segment.
-    pub fn new(segment: &'a ContextSegment, is_selected: bool, pulse_intensity: f32) -> Self {
+    pub fn new(
+        segment: &'a ContextSegment,
+        is_selected: bool,
+        pulse_intensity: f32,
+        stats: Option<&'a UsageStats>,
+    ) -> Self {
         Self {
             segment,
             is_selected,
             pulse_intensity,
+            stats,
         }
     }
 
@@ -140,12 +148,24 @@ impl<'a> Widget for Message<'a> {
         let content = self.segment.content.trim();
 
         // Render the block into `area`, then the paragraph into the inner rect.
-        let block = Block::bordered()
+        let mut block = Block::bordered()
             .title(role)
             .border_type(ratatui::widgets::BorderType::Rounded)
             .border_style(border_style)
             .title_style(border_style)
             .padding(Padding::horizontal(CONTENT_PAD_H));
+
+        // Add stats on the bottom-right border, matching the border color
+        if let Some(stats) = self.stats {
+            let summary = stats.display_summary();
+            if summary != "Response complete." {
+                block = block.title_bottom(
+                    ratatui::text::Line::from(format!(" {summary} "))
+                        .right_aligned()
+                        .style(border_style),
+                );
+            }
+        }
 
         // Get the inner area of the block where the paragraph will be rendered
         let inner_area = block.inner(area);

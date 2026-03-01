@@ -41,7 +41,7 @@ pub enum TuiEvent {
     MouseMove(u16, u16),
     MouseClick(u16, u16), // Left click — col, row
     CycleEffort,          // Ctrl+R to cycle reasoning effort
-    Resize,      // Terminal resized — triggers redraw
+    Resize,               // Terminal resized — triggers redraw
 }
 
 /// Poll for an event without blocking (returns immediately)

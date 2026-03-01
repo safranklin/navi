@@ -38,7 +38,7 @@ async fn collect_chunks(mut receiver: mpsc::Receiver<StreamChunk>) -> CollectedS
         match chunk {
             StreamChunk::Content { text, .. } => result.content.push(text),
             StreamChunk::Thinking { text, .. } => result.thinking.push(text),
-            StreamChunk::Completed | StreamChunk::ToolCall(_) => {}
+            StreamChunk::Completed(_) | StreamChunk::ToolCall(_) => {}
         }
     }
 
@@ -385,4 +385,3 @@ async fn test_effort_levels_affect_request() {
         assert!(result.is_ok(), "Failed for effort level: {:?}", effort);
     }
 }
-

@@ -292,7 +292,128 @@ pub enum StreamChunk {
     },
     ToolCall(ToolCall), // Complete tool call (arguments buffered by provider)
     /// Signals stream completion. Providers send this as their final chunk before returning Ok(()).
-    Completed,
+    /// Carries usage statistics parsed from the `response.completed` payload, if available.
+    Completed(Option<UsageStats>),
+}
+
+/// Token usage and timing statistics from a single inference round.
+///
+/// All fields are optional — providers vary in what they report.
+/// Accumulated across agentic rounds via `accumulate()`.
+#[derive(Debug, Clone, Default)]
+pub struct UsageStats {
+    pub input_tokens: Option<u32>,
+    pub output_tokens: Option<u32>,
+    pub total_tokens: Option<u32>,
+    pub cache_creation_input_tokens: Option<u32>,
+    pub cache_read_input_tokens: Option<u32>,
+    pub finish_reason: Option<String>,
+    pub ttft_ms: Option<u64>,
+    pub tokens_per_sec: Option<f32>,
+    pub generation_duration_ms: Option<u64>,
+}
+
+/// Adds two `Option<u32>` values: None + None = None, otherwise sum.
+fn add_opt(a: Option<u32>, b: Option<u32>) -> Option<u32> {
+    match (a, b) {
+        (Some(x), Some(y)) => Some(x + y),
+        (Some(x), None) | (None, Some(x)) => Some(x),
+        (None, None) => None,
+    }
+}
+
+impl UsageStats {
+    /// Accumulates another round's stats into this one.
+    /// Sums token counts, preserves the first TTFT, and recalculates tok/s.
+    pub fn accumulate(&mut self, other: &UsageStats) {
+        self.input_tokens = add_opt(self.input_tokens, other.input_tokens);
+        self.output_tokens = add_opt(self.output_tokens, other.output_tokens);
+        self.total_tokens = add_opt(self.total_tokens, other.total_tokens);
+        self.cache_creation_input_tokens = add_opt(
+            self.cache_creation_input_tokens,
+            other.cache_creation_input_tokens,
+        );
+        self.cache_read_input_tokens =
+            add_opt(self.cache_read_input_tokens, other.cache_read_input_tokens);
+
+        // Keep first TTFT (most meaningful for the user's perceived latency)
+        if self.ttft_ms.is_none() {
+            self.ttft_ms = other.ttft_ms;
+        }
+
+        // Sum durations
+        self.generation_duration_ms =
+            add_opt_u64(self.generation_duration_ms, other.generation_duration_ms);
+
+        // Recalculate tok/s from accumulated output_tokens / total_duration
+        if let (Some(tokens), Some(duration_ms)) = (self.output_tokens, self.generation_duration_ms)
+            && duration_ms > 0
+        {
+            self.tokens_per_sec = Some(tokens as f32 / (duration_ms as f32 / 1000.0));
+        }
+
+        // Last finish_reason wins
+        if other.finish_reason.is_some() {
+            self.finish_reason.clone_from(&other.finish_reason);
+        }
+    }
+
+    /// Formats a human-readable summary for the status bar.
+    /// e.g. "150 in / 42 out (80 cached) | TTFT 340ms | 28.5 tok/s | 1.2s"
+    pub fn display_summary(&self) -> String {
+        let mut parts = Vec::new();
+
+        // Token counts
+        let mut token_part = String::new();
+        if let Some(input) = self.input_tokens {
+            token_part.push_str(&format!("{input} in"));
+        }
+        if let Some(output) = self.output_tokens {
+            if !token_part.is_empty() {
+                token_part.push_str(" / ");
+            }
+            token_part.push_str(&format!("{output} out"));
+        }
+        if let Some(cached) = self.cache_read_input_tokens
+            && cached > 0
+        {
+            token_part.push_str(&format!(" ({cached} cached)"));
+        }
+        if !token_part.is_empty() {
+            parts.push(token_part);
+        }
+
+        // TTFT
+        if let Some(ttft) = self.ttft_ms {
+            parts.push(format!("TTFT {ttft}ms"));
+        }
+
+        // Tokens per second
+        if let Some(tps) = self.tokens_per_sec {
+            parts.push(format!("{tps:.1} tok/s"));
+        }
+
+        // Total generation duration
+        if let Some(duration_ms) = self.generation_duration_ms {
+            let secs = duration_ms as f64 / 1000.0;
+            parts.push(format!("{secs:.1}s"));
+        }
+
+        if parts.is_empty() {
+            "Response complete.".to_string()
+        } else {
+            parts.join(" | ")
+        }
+    }
+}
+
+/// Adds two `Option<u64>` values: None + None = None, otherwise sum.
+fn add_opt_u64(a: Option<u64>, b: Option<u64>) -> Option<u64> {
+    match (a, b) {
+        (Some(x), Some(y)) => Some(x + y),
+        (Some(x), None) | (None, Some(x)) => Some(x),
+        (None, None) => None,
+    }
 }
 
 #[cfg(test)]
@@ -468,5 +589,107 @@ mod tests {
             unwrap_message(ctx.items.last().unwrap()).content,
             "Hello \"World\"--WAIT"
         );
+    }
+
+    // =====================================================================
+    // UsageStats tests
+    // =====================================================================
+
+    #[test]
+    fn test_accumulate_sums_tokens() {
+        let mut base = UsageStats {
+            input_tokens: Some(100),
+            output_tokens: Some(20),
+            total_tokens: Some(120),
+            ..Default::default()
+        };
+        let round2 = UsageStats {
+            input_tokens: Some(150),
+            output_tokens: Some(30),
+            total_tokens: Some(180),
+            ..Default::default()
+        };
+        base.accumulate(&round2);
+        assert_eq!(base.input_tokens, Some(250));
+        assert_eq!(base.output_tokens, Some(50));
+        assert_eq!(base.total_tokens, Some(300));
+    }
+
+    #[test]
+    fn test_accumulate_preserves_first_ttft() {
+        let mut base = UsageStats {
+            ttft_ms: Some(340),
+            ..Default::default()
+        };
+        let round2 = UsageStats {
+            ttft_ms: Some(120),
+            ..Default::default()
+        };
+        base.accumulate(&round2);
+        assert_eq!(base.ttft_ms, Some(340)); // First TTFT preserved
+
+        // When base has no TTFT, takes the other's
+        let mut empty = UsageStats::default();
+        empty.accumulate(&UsageStats {
+            ttft_ms: Some(200),
+            ..Default::default()
+        });
+        assert_eq!(empty.ttft_ms, Some(200));
+    }
+
+    #[test]
+    fn test_accumulate_recalculates_tok_per_sec() {
+        let mut base = UsageStats {
+            output_tokens: Some(30),
+            generation_duration_ms: Some(1000),
+            ..Default::default()
+        };
+        let round2 = UsageStats {
+            output_tokens: Some(20),
+            generation_duration_ms: Some(1000),
+            ..Default::default()
+        };
+        base.accumulate(&round2);
+        // 50 tokens / 2.0 seconds = 25.0 tok/s
+        assert!((base.tokens_per_sec.unwrap() - 25.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_display_summary_all_fields() {
+        let stats = UsageStats {
+            input_tokens: Some(150),
+            output_tokens: Some(42),
+            cache_read_input_tokens: Some(80),
+            ttft_ms: Some(340),
+            tokens_per_sec: Some(28.5),
+            generation_duration_ms: Some(1200),
+            ..Default::default()
+        };
+        let summary = stats.display_summary();
+        assert!(summary.contains("150 in"));
+        assert!(summary.contains("42 out"));
+        assert!(summary.contains("80 cached"));
+        assert!(summary.contains("TTFT 340ms"));
+        assert!(summary.contains("28.5 tok/s"));
+        assert!(summary.contains("1.2s"));
+    }
+
+    #[test]
+    fn test_display_summary_empty() {
+        let stats = UsageStats::default();
+        assert_eq!(stats.display_summary(), "Response complete.");
+    }
+
+    #[test]
+    fn test_display_summary_partial() {
+        let stats = UsageStats {
+            output_tokens: Some(42),
+            generation_duration_ms: Some(1500),
+            ..Default::default()
+        };
+        let summary = stats.display_summary();
+        assert!(summary.contains("42 out"));
+        assert!(summary.contains("1.5s"));
+        assert!(!summary.contains("in")); // no input tokens
     }
 }

@@ -57,9 +57,7 @@ const fn pending_style() -> Style {
     Style::new().fg(Color::DarkGray)
 }
 const fn overflow_style() -> Style {
-    Style::new()
-        .fg(Color::DarkGray)
-        .add_modifier(Modifier::DIM)
+    Style::new().fg(Color::DarkGray).add_modifier(Modifier::DIM)
 }
 const fn sep_style() -> Style {
     Style::new().fg(Color::DarkGray)
@@ -315,7 +313,11 @@ fn join_with_ellipsis(parts: &[String], budget: usize) -> String {
         let remaining = total - i - 1;
 
         let candidate_len = result.chars().count() + sep.chars().count() + part.chars().count();
-        let ellipsis_overhead = if remaining > 0 { ", …".chars().count() } else { 0 };
+        let ellipsis_overhead = if remaining > 0 {
+            ", …".chars().count()
+        } else {
+            0
+        };
 
         if candidate_len + ellipsis_overhead > budget && i > 0 {
             result.push_str(", …");

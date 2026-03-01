@@ -40,6 +40,7 @@ pub fn draw_ui(frame: &mut Frame, app: &App, tui: &mut TuiState, spinner_frame: 
             app.is_loading,
             tui.pulse_value,
             spinner_frame,
+            &app.message_stats,
         );
         // Mutable render call updates layout cache and renders to scroll view
         message_list.render(frame, main_area);

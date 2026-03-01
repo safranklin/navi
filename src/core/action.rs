@@ -14,7 +14,7 @@
 //! And debuggable: log every action, replay the exact session.
 
 use crate::core::state::{App, MAX_AGENTIC_ROUNDS};
-use crate::inference::{ToolCall, ToolResult};
+use crate::inference::{ToolCall, ToolResult, UsageStats};
 use log::{debug, warn};
 
 #[derive(Debug)]
@@ -33,8 +33,8 @@ pub enum Action {
         text: String,
         item_id: Option<String>,
     },
-    // Signal that the streaming response is complete.
-    ResponseDone,
+    // Signal that the streaming response is complete, with optional usage stats.
+    ResponseDone(Option<UsageStats>),
     // Model wants to call a tool
     ToolCallReceived(ToolCall),
     // A tool execution completed
@@ -86,7 +86,7 @@ fn check_round_complete(app_state: &mut App) -> Effect {
         } else {
             // Pure text response — no tools were called
             app_state.is_loading = false;
-            app_state.status_message = String::from("Response complete.");
+            app_state.status_message = app_state.usage_stats.display_summary();
             Effect::Render
         }
     } else if !app_state.pending_tool_calls.is_empty() {
@@ -113,6 +113,8 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
             app_state.agentic_rounds = 0;
             app_state.stream_done = false;
             app_state.had_tool_calls = false;
+            app_state.usage_stats = UsageStats::default();
+            app_state.message_stats.clear();
             app_state.status_message = String::from("Loading...");
             Effect::SpawnRequest
         }
@@ -141,9 +143,23 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
             app_state.status_message = String::from("Thinking...");
             Effect::Render
         }
-        Action::ResponseDone => {
+        Action::ResponseDone(stats) => {
             app_state.context.clear_active_streams();
             app_state.stream_done = true;
+            if let Some(round_stats) = stats {
+                app_state.usage_stats.accumulate(&round_stats);
+                // Store per-message stats on the last Model message
+                if let Some(idx) = app_state
+                    .context
+                    .items
+                    .iter()
+                    .rposition(|item| {
+                        matches!(item, crate::inference::ContextItem::Message(seg) if seg.source == crate::inference::Source::Model)
+                    })
+                {
+                    app_state.message_stats.insert(idx, round_stats);
+                }
+            }
             if let Some(crate::inference::ContextItem::Message(last)) =
                 app_state.context.items.last()
             {
@@ -179,6 +195,7 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
             app_state.pending_tool_calls.clear();
             app_state.stream_done = false;
             app_state.had_tool_calls = false;
+            app_state.usage_stats = UsageStats::default();
             app_state.context.clear_active_streams();
             app_state.status_message = String::from("Cancelled.");
             Effect::Render
@@ -254,7 +271,7 @@ mod tests {
         let mut app = test_app();
         app.is_loading = true;
 
-        let effect = update(&mut app, Action::ResponseDone);
+        let effect = update(&mut app, Action::ResponseDone(None));
 
         assert!(!app.is_loading);
         assert_eq!(app.status_message, "Response complete.");
@@ -382,7 +399,7 @@ mod tests {
         app.had_tool_calls = true;
         app.pending_tool_calls.insert("call_1".to_string());
 
-        let effect = update(&mut app, Action::ResponseDone);
+        let effect = update(&mut app, Action::ResponseDone(None));
 
         assert!(app.is_loading); // Still loading — tools not done yet
         assert!(app.stream_done);
@@ -420,7 +437,7 @@ mod tests {
         assert!(matches!(effect, Effect::ExecuteTool(_)));
 
         // Stream finishes — but call_2 is still pending
-        let effect = update(&mut app, Action::ResponseDone);
+        let effect = update(&mut app, Action::ResponseDone(None));
         assert_eq!(effect, Effect::Render);
         assert!(app.is_loading);
 
@@ -446,5 +463,87 @@ mod tests {
         assert!(!app.stream_done);
         assert!(!app.had_tool_calls);
         assert_eq!(app.agentic_rounds, 0);
+    }
+
+    #[test]
+    fn test_response_done_with_stats_updates_status() {
+        let mut app = test_app();
+        app.is_loading = true;
+
+        let stats = UsageStats {
+            input_tokens: Some(100),
+            output_tokens: Some(30),
+            ttft_ms: Some(250),
+            generation_duration_ms: Some(1000),
+            tokens_per_sec: Some(30.0),
+            ..Default::default()
+        };
+        let effect = update(&mut app, Action::ResponseDone(Some(stats)));
+
+        assert!(!app.is_loading);
+        assert!(app.status_message.contains("100 in"));
+        assert!(app.status_message.contains("30 out"));
+        assert!(app.status_message.contains("TTFT 250ms"));
+        assert_eq!(effect, Effect::Render);
+    }
+
+    #[test]
+    fn test_submit_resets_usage_stats() {
+        let mut app = test_app();
+        app.usage_stats.input_tokens = Some(500);
+        app.usage_stats.output_tokens = Some(100);
+
+        update(&mut app, Action::Submit("hello".to_string()));
+
+        assert!(app.usage_stats.input_tokens.is_none());
+        assert!(app.usage_stats.output_tokens.is_none());
+    }
+
+    #[test]
+    fn test_stats_accumulate_across_agentic_rounds() {
+        let mut app = test_app();
+        app.is_loading = true;
+
+        // Round 1: tool-calling round
+        let tc = make_tool_call("add", "call_1");
+        update(&mut app, Action::ToolCallReceived(tc));
+
+        let round1_stats = UsageStats {
+            input_tokens: Some(100),
+            output_tokens: Some(20),
+            ttft_ms: Some(300),
+            generation_duration_ms: Some(800),
+            ..Default::default()
+        };
+        update(&mut app, Action::ResponseDone(Some(round1_stats)));
+
+        // Complete the tool
+        update(
+            &mut app,
+            Action::ToolResultReady {
+                call_id: "call_1".to_string(),
+                output: "42".to_string(),
+            },
+        );
+
+        // Round 2: pure text
+        let round2_stats = UsageStats {
+            input_tokens: Some(150),
+            output_tokens: Some(30),
+            ttft_ms: Some(200),
+            generation_duration_ms: Some(1200),
+            ..Default::default()
+        };
+        update(&mut app, Action::ResponseDone(Some(round2_stats)));
+
+        // Tokens should be summed
+        assert_eq!(app.usage_stats.input_tokens, Some(250));
+        assert_eq!(app.usage_stats.output_tokens, Some(50));
+        // First TTFT preserved
+        assert_eq!(app.usage_stats.ttft_ms, Some(300));
+        // Durations summed
+        assert_eq!(app.usage_stats.generation_duration_ms, Some(2000));
+        // Status should show the summary
+        assert!(app.status_message.contains("250 in"));
     }
 }

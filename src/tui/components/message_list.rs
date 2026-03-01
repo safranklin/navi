@@ -24,7 +24,7 @@ use ratatui::Frame;
 use ratatui::layout::{Position, Rect, Size};
 use tui_scrollview::{ScrollView, ScrollViewState, ScrollbarVisibility};
 
-use crate::inference::{Context, ContextItem, Source};
+use crate::inference::{Context, ContextItem, Source, UsageStats};
 use crate::tui::component::{Component, EventHandler};
 use crate::tui::components::logo::Logo;
 use crate::tui::components::message::Message;
@@ -103,14 +103,12 @@ impl MessageListState {
 
         if item_top < offset_y {
             // Selected message is above viewport — scroll up to show its top
-            self.scroll_state
-                .set_offset(Position { x: 0, y: item_top });
+            self.scroll_state.set_offset(Position { x: 0, y: item_top });
             self.stick_to_bottom = false;
         } else if item_bottom > offset_y + self.viewport_height {
             // Selected message is below viewport — scroll down to show its bottom
             let new_y = item_bottom.saturating_sub(self.viewport_height);
-            self.scroll_state
-                .set_offset(Position { x: 0, y: new_y });
+            self.scroll_state.set_offset(Position { x: 0, y: new_y });
             // Re-pin if we've landed at the absolute bottom
             let total: u16 = self.layout.heights.iter().sum();
             let max_y = total.saturating_sub(self.viewport_height);
@@ -136,7 +134,9 @@ impl MessageListState {
 
 /// Build a lookup from call_id → (index, &ToolResult) for all ToolResult items,
 /// plus the set of consumed ToolResult indices (those whose call_id matches a ToolCall).
-fn build_result_map(items: &[ContextItem]) -> (HashMap<&str, &crate::inference::ToolResult>, HashSet<usize>) {
+fn build_result_map(
+    items: &[ContextItem],
+) -> (HashMap<&str, &crate::inference::ToolResult>, HashSet<usize>) {
     let mut result_map: HashMap<&str, &crate::inference::ToolResult> = HashMap::new();
     let mut result_indices: HashMap<&str, usize> = HashMap::new();
 
@@ -169,6 +169,7 @@ pub struct MessageList<'a> {
     pub is_loading: bool,
     pub pulse_value: f32,
     pub spinner_frame: usize,
+    pub message_stats: &'a HashMap<usize, UsageStats>,
 }
 
 impl<'a> MessageList<'a> {
@@ -178,6 +179,7 @@ impl<'a> MessageList<'a> {
         is_loading: bool,
         pulse_value: f32,
         spinner_frame: usize,
+        message_stats: &'a HashMap<usize, UsageStats>,
     ) -> Self {
         Self {
             state,
@@ -185,6 +187,7 @@ impl<'a> MessageList<'a> {
             is_loading,
             pulse_value,
             spinner_frame,
+            message_stats,
         }
     }
 }
@@ -219,9 +222,7 @@ impl<'a> Component for MessageList<'a> {
         {
             let is_expanded = expanded_indices.contains(&i);
             let height = match item {
-                ContextItem::Message(seg) => {
-                    Message::calculate_height(seg, content_width)
-                }
+                ContextItem::Message(seg) => Message::calculate_height(seg, content_width),
                 ContextItem::ToolCall(tc) => {
                     let paired_result = result_map.get(tc.call_id.as_str()).copied();
                     ToolGroup::calculate_height(tc, paired_result, is_expanded, content_width)
@@ -297,7 +298,8 @@ impl<'a> Component for MessageList<'a> {
                     } else {
                         0.0
                     };
-                    let message = Message::new(seg, is_selected, pulse_intensity);
+                    let stats = self.message_stats.get(&i);
+                    let message = Message::new(seg, is_selected, pulse_intensity, stats);
                     scroll_view.render_widget(message, segment_rect);
                 }
                 ContextItem::ToolCall(tc) => {
@@ -462,8 +464,7 @@ impl LayoutCache {
             ContextItem::Message(seg) => {
                 matches!(seg.source, Source::User | Source::Directive)
             }
-            ContextItem::ToolCall(_)
-            | ContextItem::ToolResult(_) => true,
+            ContextItem::ToolCall(_) | ContextItem::ToolResult(_) => true,
         });
 
         if last_is_stable {
@@ -473,7 +474,12 @@ impl LayoutCache {
         }
     }
 
-    pub fn update_metadata(&mut self, message_count: usize, content_width: u16, expanded_indices: &HashSet<usize>) {
+    pub fn update_metadata(
+        &mut self,
+        message_count: usize,
+        content_width: u16,
+        expanded_indices: &HashSet<usize>,
+    ) {
         self.message_count = message_count;
         self.content_width = content_width;
         self.cached_expanded_indices = expanded_indices.clone();
@@ -583,10 +589,7 @@ mod tests {
         ];
 
         // Should exclude the volatile last item so its height gets recalculated
-        assert_eq!(
-            cache.reusable_count(2, 80, false, &items, &no_expanded),
-            1
-        );
+        assert_eq!(cache.reusable_count(2, 80, false, &items, &no_expanded), 1);
 
         // Non-volatile last item (User) should trust the cache fully
         let stable_items = vec![

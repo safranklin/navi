@@ -277,11 +277,8 @@ pub fn run(provider_choice: Provider) -> std::io::Result<()> {
                                 break;
                             }
                         }
-                        tui.message_list.selected_index = if !items.is_empty() {
-                            Some(idx)
-                        } else {
-                            None
-                        };
+                        tui.message_list.selected_index =
+                            if !items.is_empty() { Some(idx) } else { None };
                         continue;
                     }
 
@@ -292,8 +289,7 @@ pub fn run(provider_choice: Provider) -> std::io::Result<()> {
                                 if !app.is_loading {
                                     let effect = update(&mut app, Action::Submit(text));
                                     if effect == Effect::SpawnRequest {
-                                        active_abort_handles =
-                                            spawn_request(&app, tx.clone());
+                                        active_abort_handles = spawn_request(&app, tx.clone());
                                     }
                                 }
                             }
@@ -352,9 +348,7 @@ pub fn run(provider_choice: Provider) -> std::io::Result<()> {
                                     .map(|i| i.saturating_sub(1))
                                     .unwrap_or(items.len() - 1);
                                 // Skip backwards past ToolResult items
-                                while idx > 0
-                                    && matches!(items[idx], ContextItem::ToolResult(_))
-                                {
+                                while idx > 0 && matches!(items[idx], ContextItem::ToolResult(_)) {
                                     idx -= 1;
                                 }
                                 tui.message_list.selected_index = Some(idx);
@@ -500,10 +494,17 @@ fn spawn_request(app: &App, tx: mpsc::Sender<Action>) -> Vec<tokio::task::AbortH
         let mut forwarded_count = 0usize;
         let mut total_content_len = 0usize;
 
+        // Client-side timing
+        let request_start = std::time::Instant::now();
+        let mut first_content_time: Option<std::time::Instant> = None;
+
         while let Some(chunk) = chunk_rx.recv().await {
             forwarded_count += 1;
             match chunk {
                 StreamChunk::Content { text, item_id } => {
+                    if first_content_time.is_none() {
+                        first_content_time = Some(std::time::Instant::now());
+                    }
                     total_content_len += text.len();
                     debug!(
                         "Forwarding Action::ResponseChunk (len={}, total={})",
@@ -516,6 +517,9 @@ fn spawn_request(app: &App, tx: mpsc::Sender<Action>) -> Vec<tokio::task::AbortH
                     }
                 }
                 StreamChunk::Thinking { text, item_id } => {
+                    if first_content_time.is_none() {
+                        first_content_time = Some(std::time::Instant::now());
+                    }
                     debug!("Forwarding Action::ThinkingChunk (len={})", text.len());
                     if tx.send(Action::ThinkingChunk { text, item_id }).is_err() {
                         warn!("Failed to forward ThinkingChunk: receiver dropped");
@@ -529,17 +533,47 @@ fn spawn_request(app: &App, tx: mpsc::Sender<Action>) -> Vec<tokio::task::AbortH
                         return;
                     }
                 }
-                StreamChunk::Completed => {
-                    debug!("Stream completed");
+                StreamChunk::Completed(provider_stats) => {
+                    let duration_ms = request_start.elapsed().as_millis() as u64;
+                    let ttft_ms =
+                        first_content_time.map(|t| (t - request_start).as_millis() as u64);
+
+                    // Enrich provider stats with client-side timing
+                    let mut stats = provider_stats.unwrap_or_default();
+                    stats.ttft_ms = ttft_ms;
+                    stats.generation_duration_ms = Some(duration_ms);
+                    if let Some(output_tokens) = stats.output_tokens
+                        && duration_ms > 0
+                    {
+                        stats.tokens_per_sec =
+                            Some(output_tokens as f32 / (duration_ms as f32 / 1000.0));
+                    }
+
+                    debug!(
+                        "Stream completed: ttft={}ms, duration={}ms, tok/s={:?}",
+                        ttft_ms.unwrap_or(0),
+                        duration_ms,
+                        stats.tokens_per_sec
+                    );
+
+                    info!(
+                        "Forwarding complete: {} actions, {} content bytes",
+                        forwarded_count, total_content_len
+                    );
+                    if tx.send(Action::ResponseDone(Some(stats))).is_err() {
+                        warn!("Failed to send ResponseDone: receiver dropped");
+                    }
+                    return;
                 }
             }
         }
 
+        // Fallback: channel closed without a Completed event
         info!(
-            "Forwarding complete: {} actions, {} content bytes",
+            "Stream channel closed: {} actions, {} content bytes",
             forwarded_count, total_content_len
         );
-        if tx.send(Action::ResponseDone).is_err() {
+        if tx.send(Action::ResponseDone(None)).is_err() {
             warn!("Failed to send ResponseDone: receiver dropped");
         }
     });

@@ -16,15 +16,17 @@
 //! ├── pending_tool_calls: HashSet   // call_ids awaiting results
 //! ├── agentic_rounds: u8           // loop iteration counter
 //! ├── stream_done: bool            // SSE stream finished
-//! └── had_tool_calls: bool         // tool calls received this round
+//! ├── had_tool_calls: bool         // tool calls received this round
+//! ├── usage_stats: UsageStats     // accumulated inference metrics
+//! └── message_stats: HashMap      // per-message stats keyed by item index
 //! ```
 //!
 //! State changes only happen through `update(state, action)` in action.rs.
 //! This keeps things predictable, so no surprise mutations.
 
 use crate::core::tools::ToolRegistry;
-use crate::inference::{CompletionProvider, Context, Effort, ToolDefinition};
-use std::collections::HashSet;
+use crate::inference::{CompletionProvider, Context, Effort, ToolDefinition, UsageStats};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 /// Maximum number of agentic tool-calling rounds before the loop is forcibly stopped.
@@ -45,6 +47,11 @@ pub struct App {
     pub stream_done: bool,
     /// True if any `ToolCallReceived` arrived this round.
     pub had_tool_calls: bool,
+    /// Accumulated usage stats for the current submission (across agentic rounds).
+    pub usage_stats: UsageStats,
+    /// Per-message usage stats, keyed by context item index.
+    /// Each model message gets the stats from its agentic round.
+    pub message_stats: HashMap<usize, UsageStats>,
 }
 
 impl App {
@@ -62,6 +69,8 @@ impl App {
             agentic_rounds: 0,
             stream_done: false,
             had_tool_calls: false,
+            usage_stats: UsageStats::default(),
+            message_stats: HashMap::new(),
         }
     }
 

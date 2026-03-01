@@ -13,7 +13,7 @@ use tokio::sync::mpsc::Sender;
 
 use crate::inference::{
     CompletionProvider, CompletionRequest, ContextItem, Effort, ProviderError, Source, StreamChunk,
-    ToolDefinition,
+    ToolDefinition, UsageStats,
 };
 
 // ============================================================================
@@ -136,6 +136,39 @@ struct PendingToolCall {
     args_buffer: String, // Accumulates argument deltas
 }
 
+/// Payload of the `response.completed` SSE event.
+/// The real structure nests data under a `response` key:
+/// `{"type":"response.completed","response":{"id":"...","usage":{...},"status":"completed"}}`
+#[derive(Deserialize, Debug)]
+struct CompletedResponsePayload {
+    #[serde(default)]
+    response: Option<CompletedResponse>,
+}
+
+/// The inner `response` object from the completed event.
+#[derive(Deserialize, Debug)]
+struct CompletedResponse {
+    #[serde(default)]
+    usage: Option<CompletedUsage>,
+    #[serde(default)]
+    status: Option<String>,
+}
+
+/// Token usage breakdown from the completed response.
+#[derive(Deserialize, Debug)]
+struct CompletedUsage {
+    #[serde(default)]
+    input_tokens: Option<u32>,
+    #[serde(default)]
+    output_tokens: Option<u32>,
+    #[serde(default)]
+    total_tokens: Option<u32>,
+    #[serde(default)]
+    cache_creation_input_tokens: Option<u32>,
+    #[serde(default)]
+    cache_read_input_tokens: Option<u32>,
+}
+
 // ============================================================================
 // Translation Layer
 // ============================================================================
@@ -217,6 +250,29 @@ fn effort_to_reasoning(effort: Effort) -> Reasoning {
             }
         }
     }
+}
+
+/// Parses the `response.completed` SSE data into `UsageStats`.
+/// Returns `None` if parsing fails — we never want to crash over missing metrics.
+fn parse_completed_payload(data: &str) -> Option<UsageStats> {
+    let payload: CompletedResponsePayload = match serde_json::from_str(data) {
+        Ok(p) => p,
+        Err(e) => {
+            debug!("Failed to parse response.completed payload: {}", e);
+            return None;
+        }
+    };
+    let response = payload.response?;
+    let usage = response.usage?;
+    Some(UsageStats {
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        total_tokens: usage.total_tokens,
+        cache_creation_input_tokens: usage.cache_creation_input_tokens,
+        cache_read_input_tokens: usage.cache_read_input_tokens,
+        finish_reason: response.status,
+        ..Default::default()
+    })
 }
 
 // ============================================================================
@@ -482,7 +538,8 @@ impl CompletionProvider for LmStudioProvider {
                                 chunk_count, total_content_len
                             );
                             debug!("response.completed data: {}", data);
-                            if sender.send(StreamChunk::Completed).await.is_err() {
+                            let stats = parse_completed_payload(data);
+                            if sender.send(StreamChunk::Completed(stats)).await.is_err() {
                                 warn!("Completed send failed: receiver dropped");
                                 return Err(ProviderError::ChannelClosed);
                             }
@@ -738,4 +795,34 @@ mod tests {
         assert_eq!(full.len(), 4); // system + user + model + user
     }
 
+    #[test]
+    fn test_parse_completed_payload_with_usage() {
+        let data = r#"{"type":"response.completed","response":{"id":"resp_1","usage":{"input_tokens":100,"output_tokens":30,"total_tokens":130},"status":"completed"}}"#;
+        let stats = parse_completed_payload(data).unwrap();
+        assert_eq!(stats.input_tokens, Some(100));
+        assert_eq!(stats.output_tokens, Some(30));
+        assert_eq!(stats.total_tokens, Some(130));
+        assert_eq!(stats.finish_reason.as_deref(), Some("completed"));
+    }
+
+    #[test]
+    fn test_parse_completed_payload_without_usage() {
+        let data =
+            r#"{"type":"response.completed","response":{"id":"resp_1","status":"completed"}}"#;
+        let stats = parse_completed_payload(data);
+        assert!(stats.is_none());
+    }
+
+    #[test]
+    fn test_parse_completed_payload_no_response_object() {
+        let data = r#"{"type":"response.completed"}"#;
+        let stats = parse_completed_payload(data);
+        assert!(stats.is_none());
+    }
+
+    #[test]
+    fn test_parse_completed_payload_invalid_json() {
+        let stats = parse_completed_payload("not json");
+        assert!(stats.is_none());
+    }
 }
