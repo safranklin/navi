@@ -13,6 +13,7 @@
 //! This makes everything testable: `assert_eq!(update(state, action), expected)`.
 //! And debuggable: log every action, replay the exact session.
 
+use crate::core::config::ModelEntry;
 use crate::core::session::SessionData;
 use crate::core::state::App;
 use crate::inference::{Context, ToolCall, ToolResult, UsageStats};
@@ -49,6 +50,8 @@ pub enum Action {
     LoadSession(SessionData),
     // Reset to a fresh conversation
     NewSession,
+    // Dynamic models fetched from provider APIs (handled by TUI, not core)
+    ModelsFetched(Vec<ModelEntry>),
 }
 
 #[derive(Debug, PartialEq)]
@@ -241,6 +244,9 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
             app_state.status_message = String::from("New session.");
             Effect::Render
         }
+        // ModelsFetched is TUI-only state — core update() is a no-op.
+        // The TUI event loop intercepts this before it reaches update().
+        Action::ModelsFetched(_) => Effect::None,
     }
 }
 
