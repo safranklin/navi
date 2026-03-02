@@ -68,7 +68,7 @@ pub const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 16384;
 pub const DEFAULT_OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
 pub const DEFAULT_LMSTUDIO_BASE_URL: &str = "http://localhost:1234/v1";
 
-const DEFAULT_SYSTEM_PROMPT: &str = "You are a helpful assistant. \
+pub const DEFAULT_SYSTEM_PROMPT: &str = "You are a helpful assistant. \
     TOOL USE IS MANDATORY: if a registered tool can perform a computation, lookup, or action, you MUST call it. \
     NEVER perform arithmetic, math, or calculations yourself — always delegate to the appropriate tool. \
     When independent sub-expressions can be computed simultaneously, call multiple tools in parallel. \

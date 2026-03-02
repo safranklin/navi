@@ -90,6 +90,18 @@ impl Context {
         }
     }
 
+    /// Creates a new Context with a custom system directive.
+    pub fn with_system_prompt(prompt: String) -> Self {
+        let sys_directive = ContextSegment {
+            source: Source::Directive,
+            content: prompt,
+        };
+        Context {
+            items: vec![ContextItem::Message(sys_directive)],
+            active_streams: HashMap::new(),
+        }
+    }
+
     /// Adds a new ContextSegment (wrapped in ContextItem::Message) and returns a reference to it.
     pub fn add(&mut self, segment: ContextSegment) -> &ContextSegment {
         self.items.push(ContextItem::Message(segment));

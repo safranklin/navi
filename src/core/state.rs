@@ -24,13 +24,13 @@
 //! State changes only happen through `update(state, action)` in action.rs.
 //! This keeps things predictable, so no surprise mutations.
 
+use crate::core::config::{
+    self, ModelEntry, ResolvedConfig, DEFAULT_MAX_AGENTIC_ROUNDS, DEFAULT_MAX_OUTPUT_TOKENS,
+};
 use crate::core::tools::ToolRegistry;
 use crate::inference::{CompletionProvider, Context, Effort, ToolDefinition, UsageStats};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-
-/// Maximum number of agentic tool-calling rounds before the loop is forcibly stopped.
-pub const MAX_AGENTIC_ROUNDS: u8 = 20;
 
 pub struct App {
     pub provider: Arc<dyn CompletionProvider>,
@@ -54,9 +54,19 @@ pub struct App {
     pub message_stats: HashMap<usize, UsageStats>,
     /// Active session ID (None = unsaved new session).
     pub current_session_id: Option<String>,
+
+    // --- Config-driven fields ---
+    pub max_agentic_rounds: u8,
+    pub max_output_tokens: u32,
+    pub system_prompt: String,
+    pub available_models: Vec<ModelEntry>,
+    pub openrouter_api_key: Option<String>,
+    pub openrouter_base_url: String,
+    pub lmstudio_base_url: String,
 }
 
 impl App {
+    /// Creates an App with default settings. Used by tests and backward-compat paths.
     pub fn new(provider: Arc<dyn CompletionProvider>, model_name: String) -> Self {
         Self {
             provider,
@@ -74,6 +84,44 @@ impl App {
             usage_stats: UsageStats::default(),
             message_stats: HashMap::new(),
             current_session_id: None,
+            max_agentic_rounds: DEFAULT_MAX_AGENTIC_ROUNDS,
+            max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
+            system_prompt: config::DEFAULT_SYSTEM_PROMPT.to_string(),
+            available_models: Vec::new(),
+            openrouter_api_key: None,
+            openrouter_base_url: config::DEFAULT_OPENROUTER_BASE_URL.to_string(),
+            lmstudio_base_url: config::DEFAULT_LMSTUDIO_BASE_URL.to_string(),
+        }
+    }
+
+    /// Creates an App from resolved config values.
+    pub fn from_config(
+        provider: Arc<dyn CompletionProvider>,
+        config: &ResolvedConfig,
+    ) -> Self {
+        Self {
+            provider,
+            context: Context::with_system_prompt(config.system_prompt.clone()),
+            status_message: String::from("Welcome to Navi!"),
+            model_name: config.model_name.clone(),
+            is_loading: false,
+            effort: config.effort,
+            error: None,
+            registry: Arc::new(crate::core::tools::default_registry()),
+            pending_tool_calls: HashSet::new(),
+            agentic_rounds: 0,
+            stream_done: false,
+            had_tool_calls: false,
+            usage_stats: UsageStats::default(),
+            message_stats: HashMap::new(),
+            current_session_id: None,
+            max_agentic_rounds: config.max_agentic_rounds,
+            max_output_tokens: config.max_output_tokens,
+            system_prompt: config.system_prompt.clone(),
+            available_models: config.models.clone(),
+            openrouter_api_key: config.openrouter_api_key.clone(),
+            openrouter_base_url: config.openrouter_base_url.clone(),
+            lmstudio_base_url: config.lmstudio_base_url.clone(),
         }
     }
 

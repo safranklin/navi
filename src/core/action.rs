@@ -14,7 +14,7 @@
 //! And debuggable: log every action, replay the exact session.
 
 use crate::core::session::SessionData;
-use crate::core::state::{App, MAX_AGENTIC_ROUNDS};
+use crate::core::state::App;
 use crate::inference::{Context, ToolCall, ToolResult, UsageStats};
 use log::{debug, warn};
 
@@ -72,12 +72,13 @@ fn check_round_complete(app_state: &mut App) -> Effect {
         if app_state.had_tool_calls {
             // Tool-calling round complete — advance the agentic loop
             app_state.agentic_rounds += 1;
-            if app_state.agentic_rounds > MAX_AGENTIC_ROUNDS {
-                warn!("Agentic loop limit reached ({} rounds)", MAX_AGENTIC_ROUNDS);
+            let max_rounds = app_state.max_agentic_rounds;
+            if app_state.agentic_rounds > max_rounds {
+                warn!("Agentic loop limit reached ({} rounds)", max_rounds);
                 app_state.is_loading = false;
                 app_state.error = Some(format!(
                     "Agentic loop stopped after {} rounds. The model may be stuck in a tool-calling loop.",
-                    MAX_AGENTIC_ROUNDS
+                    max_rounds
                 ));
                 app_state.status_message = String::from("Loop limit reached.");
                 app_state.stream_done = false;
@@ -208,7 +209,7 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
         }
         Action::LoadSession(data) => {
             // Rebuild fresh context with system directive, then push loaded items
-            let mut context = Context::new();
+            let mut context = Context::with_system_prompt(app_state.system_prompt.clone());
             for item in data.items {
                 context.items.push(item);
             }
@@ -227,7 +228,7 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
             Effect::Render
         }
         Action::NewSession => {
-            app_state.context = Context::new();
+            app_state.context = Context::with_system_prompt(app_state.system_prompt.clone());
             app_state.current_session_id = None;
             app_state.is_loading = false;
             app_state.pending_tool_calls.clear();
@@ -399,13 +400,11 @@ mod tests {
 
     #[test]
     fn test_agentic_loop_bound_enforced() {
-        use crate::core::state::MAX_AGENTIC_ROUNDS;
-
         let mut app = test_app();
         app.is_loading = true;
         app.had_tool_calls = true;
         app.stream_done = true;
-        app.agentic_rounds = MAX_AGENTIC_ROUNDS;
+        app.agentic_rounds = app.max_agentic_rounds;
         app.pending_tool_calls.insert("call_1".to_string());
 
         let effect = update(
