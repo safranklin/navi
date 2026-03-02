@@ -46,7 +46,8 @@ use crate::inference::{
     StreamChunk,
 };
 use crate::tui::component::EventHandler;
-use crate::tui::components::{InputBox, InputEvent, MessageListState, SessionManagerState};
+use crate::tui::components::{InputBox, InputEvent, MessageListState, ModelPickerState, SessionManagerState};
+use crate::tui::components::model_picker::ModelPickerEvent;
 use crate::tui::components::session_manager::SessionEvent;
 use crate::tui::event::{TuiEvent, poll_event_immediate, poll_event_timeout};
 
@@ -70,6 +71,8 @@ pub struct TuiState {
     pub pulse_value: f32,
     // Session manager overlay (None = hidden)
     pub session_manager: Option<SessionManagerState>,
+    // Model picker overlay (None = hidden)
+    pub model_picker: Option<ModelPickerState>,
 }
 
 impl TuiState {
@@ -80,6 +83,7 @@ impl TuiState {
             input_mode: InputMode::Input, // User expects to type immediately
             pulse_value: 0.0,
             session_manager: None,
+            model_picker: None,
         }
     }
 }
@@ -216,6 +220,43 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
             if matches!(event, TuiEvent::OpenSessionManager) {
                 let index = session::load_index().unwrap_or_default();
                 tui.session_manager = Some(SessionManagerState::new(index.sessions));
+                continue;
+            }
+
+            // Ctrl+M opens model picker
+            if matches!(event, TuiEvent::OpenModelPicker) {
+                tui.model_picker = Some(ModelPickerState::new(app.available_models.clone()));
+                continue;
+            }
+
+            // When model picker is open, route all events to it
+            if let Some(ref mut mp) = tui.model_picker {
+                if let Some(picker_event) = mp.handle_event(&event) {
+                    match picker_event {
+                        ModelPickerEvent::Select(entry) => {
+                            // Build a new resolved config with the selected model/provider
+                            let mut new_config = config.clone();
+                            new_config.provider = entry.provider.clone();
+                            new_config.model_name = entry.name.clone();
+
+                            // Rebuild the provider for the new model
+                            app.provider = build_provider(&new_config);
+                            app.model_name = entry.name.clone();
+                            app.status_message = format!(
+                                "Switched to {} ({})",
+                                entry.name, entry.provider
+                            );
+                            info!(
+                                "Model switched: {} ({})",
+                                entry.name, entry.provider
+                            );
+                            tui.model_picker = None;
+                        }
+                        ModelPickerEvent::Dismiss => {
+                            tui.model_picker = None;
+                        }
+                    }
+                }
                 continue;
             }
 

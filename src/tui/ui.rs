@@ -1,7 +1,7 @@
 use crate::core::state::App;
 use crate::tui::TuiState;
 use crate::tui::component::Component;
-use crate::tui::components::{MessageList, SessionManager, TitleBar};
+use crate::tui::components::{MessageList, ModelPicker, SessionManager, TitleBar};
 
 use ratatui::Frame;
 use ratatui::layout::Alignment;
@@ -76,6 +76,11 @@ pub fn draw_ui(frame: &mut Frame, app: &App, tui: &mut TuiState, spinner_frame: 
     // 5. Session manager overlay (on top of everything)
     if let Some(ref mut sm) = tui.session_manager {
         SessionManager::new(sm).render(frame, frame.area());
+    }
+
+    // 6. Model picker overlay (on top of everything, including session manager)
+    if let Some(ref mut mp) = tui.model_picker {
+        ModelPicker::new(mp, &app.model_name).render(frame, frame.area());
     }
 }
 

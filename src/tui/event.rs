@@ -42,6 +42,7 @@ pub enum TuiEvent {
     MouseClick(u16, u16),     // Left click — col, row
     CycleEffort,              // Ctrl+R to cycle reasoning effort
     OpenSessionManager,       // Ctrl+O to open session browser
+    OpenModelPicker,          // Ctrl+M to switch models at runtime
     Resize,                   // Terminal resized — triggers redraw
 }
 
@@ -75,6 +76,10 @@ pub fn poll_event_timeout(timeout: std::time::Duration) -> Option<TuiEvent> {
                     // Ctrl+O opens session manager
                     (KeyModifiers::CONTROL, KeyCode::Char('o')) => {
                         Some(TuiEvent::OpenSessionManager)
+                    }
+                    // Ctrl+M opens model picker
+                    (KeyModifiers::CONTROL, KeyCode::Char('m')) => {
+                        Some(TuiEvent::OpenModelPicker)
                     }
                     // Ctrl+J inserts newline (ASCII LF; Ctrl+Enter sends this in most terminals)
                     (KeyModifiers::CONTROL, KeyCode::Char('j')) => Some(TuiEvent::InputChar('\n')),
