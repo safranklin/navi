@@ -30,6 +30,7 @@
 //! - [`action`]: The `Action` enum — everything that can happen in the app
 
 pub mod action;
+pub mod config;
 pub mod session;
 pub mod state;
 pub mod tools;
