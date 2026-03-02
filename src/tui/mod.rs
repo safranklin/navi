@@ -26,7 +26,6 @@ pub mod markdown;
 mod ui;
 
 use log::{debug, info, warn};
-use std::env;
 use std::io::stdout;
 use std::sync::{Arc, mpsc};
 
@@ -37,8 +36,8 @@ use crossterm::event::{
 };
 use crossterm::execute;
 
-use crate::Provider;
 use crate::core::action::{Action, Effect, update};
+use crate::core::config::ResolvedConfig;
 use crate::core::session;
 use crate::core::state::App;
 use crate::inference::Effort;
@@ -122,21 +121,27 @@ impl Drop for TerminalModeGuard {
     }
 }
 
-pub fn run(provider_choice: Provider) -> std::io::Result<()> {
-    let provider: Arc<dyn CompletionProvider> = match provider_choice {
-        Provider::OpenRouter => Arc::new(OpenRouterProvider::new(
-            env::var("OPENROUTER_API_KEY").expect("OPENROUTER_API_KEY must be set"),
-            None,
-        )),
-        Provider::LmStudio => Arc::new(LmStudioProvider::new(
-            std::env::var("LM_STUDIO_BASE_URL")
-                .unwrap_or_else(|_| "http://localhost:1234/v1".to_string()),
-        )),
-    };
+/// Build a provider from a resolved config's provider name and credentials.
+pub fn build_provider(config: &ResolvedConfig) -> Arc<dyn CompletionProvider> {
+    match config.provider.as_str() {
+        "lmstudio" => Arc::new(LmStudioProvider::new(config.lmstudio_base_url.clone())),
+        _ => {
+            // Default to openrouter
+            let api_key = config
+                .openrouter_api_key
+                .clone()
+                .expect("OpenRouter API key must be set (config file, OPENROUTER_API_KEY env var, or --provider lmstudio)");
+            Arc::new(OpenRouterProvider::new(
+                api_key,
+                Some(config.openrouter_base_url.clone()),
+            ))
+        }
+    }
+}
 
-    let model_name = env::var("PRIMARY_MODEL_NAME").expect("PRIMARY_MODEL_NAME must be set");
-    let mut app = App::new(provider, model_name);
-    // Initialize TuiState with current effort from App
+pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
+    let provider = build_provider(&config);
+    let mut app = App::from_config(provider, &config);
     let mut tui = TuiState::new(app.effort);
 
     let mut terminal = ratatui::init();

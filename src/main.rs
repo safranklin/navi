@@ -5,16 +5,15 @@ mod test_support;
 mod tui;
 
 use clap::Parser;
-use navi::Provider;
 use simplelog::{ConfigBuilder, LevelFilter, WriteLogger};
 use std::fs::File;
 
 #[derive(Parser)]
 #[command(name = "navi", about = "Model-agnostic AI assistant")]
 struct Args {
-    /// LLM provider to use
-    #[arg(short, long, default_value_t, value_enum)]
-    provider: Provider,
+    /// LLM provider to use (overrides config file and env vars)
+    #[arg(short, long)]
+    provider: Option<String>,
 }
 
 #[tokio::main]
@@ -29,7 +28,18 @@ async fn main() -> std::io::Result<()> {
         let _ = WriteLogger::init(LevelFilter::Debug, log_config, log_file);
     }
 
-    log::info!("Navi starting up with provider: {:?}", args.provider);
+    // Load and resolve config: defaults → config file → env vars → CLI flags
+    let config = core::config::load_config().unwrap_or_else(|e| {
+        log::warn!("Config error: {}, using defaults", e);
+        core::config::NaviConfig::default()
+    });
+    let resolved = core::config::resolve(&config, args.provider.as_deref());
 
-    tui::run(args.provider)
+    log::info!(
+        "Navi starting up: provider={}, model={}",
+        resolved.provider,
+        resolved.model_name,
+    );
+
+    tui::run(resolved)
 }

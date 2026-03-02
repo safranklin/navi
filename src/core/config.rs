@@ -184,11 +184,11 @@ fn generate_default_config(path: &PathBuf) {
 # description = "Local coding model"
 "#;
 
-    if let Some(parent) = path.parent() {
-        if let Err(e) = fs::create_dir_all(parent) {
-            warn!("Failed to create config directory: {}", e);
-            return;
-        }
+    if let Some(parent) = path.parent()
+        && let Err(e) = fs::create_dir_all(parent)
+    {
+        warn!("Failed to create config directory: {}", e);
+        return;
     }
     if let Err(e) = fs::write(path, default_content) {
         warn!("Failed to write default config: {}", e);
@@ -264,25 +264,25 @@ fn resolve_system_prompt(config: &NaviConfig) -> String {
     }
 
     // Try loading from system_prompt_file (relative to ~/.navi/)
-    if let Some(ref file) = config.general.system_prompt_file {
-        if let Some(home) = dirs::home_dir() {
-            let prompt_path = home.join(".navi").join(file);
-            match fs::read_to_string(&prompt_path) {
-                Ok(contents) => {
-                    let trimmed = contents.trim().to_string();
-                    if !trimmed.is_empty() {
-                        info!("Loaded system prompt from {}", prompt_path.display());
-                        return trimmed;
-                    }
-                    warn!("System prompt file is empty: {}", prompt_path.display());
+    if let Some(ref file) = config.general.system_prompt_file
+        && let Some(home) = dirs::home_dir()
+    {
+        let prompt_path = home.join(".navi").join(file);
+        match fs::read_to_string(&prompt_path) {
+            Ok(contents) => {
+                let trimmed = contents.trim().to_string();
+                if !trimmed.is_empty() {
+                    info!("Loaded system prompt from {}", prompt_path.display());
+                    return trimmed;
                 }
-                Err(e) => {
-                    warn!(
-                        "Failed to read system prompt file {}: {}",
-                        prompt_path.display(),
-                        e
-                    );
-                }
+                warn!("System prompt file is empty: {}", prompt_path.display());
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to read system prompt file {}: {}",
+                    prompt_path.display(),
+                    e
+                );
             }
         }
     }
