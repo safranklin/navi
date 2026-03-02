@@ -7,11 +7,11 @@
 //! - `SessionManagerState` lives in `TuiState`
 //! - `SessionManager` is created each frame with borrowed state
 
+use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph};
-use ratatui::Frame;
 
 use crate::core::session::SessionMeta;
 use crate::tui::event::TuiEvent;

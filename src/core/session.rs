@@ -45,7 +45,8 @@ pub struct SessionIndex {
 
 /// Returns `~/.navi/sessions/`, creating it if needed.
 pub fn sessions_dir() -> io::Result<PathBuf> {
-    let home = dirs::home_dir().ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no home directory"))?;
+    let home = dirs::home_dir()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no home directory"))?;
     let dir = home.join(".navi").join("sessions");
     fs::create_dir_all(&dir)?;
     Ok(dir)
@@ -239,8 +240,12 @@ pub fn save_current_session(app: &mut App) {
     // Load existing meta to preserve title/created_at
     let existing_meta = load_session(&id).ok().map(|d| d.meta);
 
-    if let Err(e) = save_session(&id, &app.context.items, &app.model_name, existing_meta.as_ref())
-    {
+    if let Err(e) = save_session(
+        &id,
+        &app.context.items,
+        &app.model_name,
+        existing_meta.as_ref(),
+    ) {
         warn!("Failed to save session: {}", e);
     } else {
         debug!("Session saved: {}", id);
@@ -275,7 +280,11 @@ mod tests {
 
     #[test]
     fn test_derive_title_from_first_user_message() {
-        let items = vec![directive_msg(), user_msg("What is Rust?"), model_msg("Rust is...")];
+        let items = vec![
+            directive_msg(),
+            user_msg("What is Rust?"),
+            model_msg("Rust is..."),
+        ];
         assert_eq!(derive_title(&items), "What is Rust?");
     }
 

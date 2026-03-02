@@ -164,11 +164,7 @@ impl Writer {
                 let cell_width = Line::from(cell.clone()).width();
                 let padding = col_w.saturating_sub(cell_width);
 
-                let align = table
-                    .alignments
-                    .get(i)
-                    .copied()
-                    .unwrap_or(Alignment::None);
+                let align = table.alignments.get(i).copied().unwrap_or(Alignment::None);
                 let (lpad, rpad) = match align {
                     Alignment::Right => (padding, 0),
                     Alignment::Center => (padding / 2, padding - padding / 2),
@@ -276,10 +272,8 @@ impl Writer {
             }
             Tag::BlockQuote(_) => {
                 self.blank_line_if_needed();
-                self.line_prefixes.push(Span::styled(
-                    "│ ",
-                    Style::default().fg(Color::DarkGray),
-                ));
+                self.line_prefixes
+                    .push(Span::styled("│ ", Style::default().fg(Color::DarkGray)));
                 self.push_style(
                     Style::default()
                         .fg(self.base_fg)
@@ -302,18 +296,14 @@ impl Writer {
                 } else {
                     Line::from(vec![
                         Span::styled("╭── ", bs),
-                        Span::styled(
-                            lang.to_owned(),
-                            bs.add_modifier(Modifier::BOLD),
-                        ),
+                        Span::styled(lang.to_owned(), bs.add_modifier(Modifier::BOLD)),
                         Span::styled(" ──", bs),
                     ])
                 };
                 self.push_line(top);
 
                 // Left border prefix for code content
-                self.line_prefixes
-                    .push(Span::styled("│ ", bs));
+                self.line_prefixes.push(Span::styled("│ ", bs));
 
                 // Syntax highlighting setup
                 if !lang.is_empty()
@@ -345,10 +335,7 @@ impl Writer {
                             s
                         }
                     };
-                    self.push_span(Span::styled(
-                        marker,
-                        Style::default().fg(Color::DarkGray),
-                    ));
+                    self.push_span(Span::styled(marker, Style::default().fg(Color::DarkGray)));
                 }
             }
 
@@ -522,9 +509,7 @@ fn heading_style(base_fg: Color, level: HeadingLevel) -> Style {
         HeadingLevel::H1 => Style::default()
             .fg(base_fg)
             .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-        HeadingLevel::H2 => Style::default()
-            .fg(base_fg)
-            .add_modifier(Modifier::BOLD),
+        HeadingLevel::H2 => Style::default().fg(base_fg).add_modifier(Modifier::BOLD),
         _ => Style::default()
             .fg(base_fg)
             .add_modifier(Modifier::BOLD | Modifier::ITALIC),
@@ -584,18 +569,39 @@ mod tests {
         let all_content: Vec<String> = text
             .lines
             .iter()
-            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
             .collect();
         // Top border
-        assert!(all_content[0].starts_with('╭'), "expected top border, got {:?}", all_content[0]);
+        assert!(
+            all_content[0].starts_with('╭'),
+            "expected top border, got {:?}",
+            all_content[0]
+        );
         // Content lines with left border
-        assert!(all_content[1].starts_with("│ "), "expected │ prefix, got {:?}", all_content[1]);
+        assert!(
+            all_content[1].starts_with("│ "),
+            "expected │ prefix, got {:?}",
+            all_content[1]
+        );
         assert!(all_content[1].contains("line1"));
-        assert!(all_content[2].starts_with("│ "), "expected │ prefix, got {:?}", all_content[2]);
+        assert!(
+            all_content[2].starts_with("│ "),
+            "expected │ prefix, got {:?}",
+            all_content[2]
+        );
         assert!(all_content[2].contains("line2"));
         // Bottom border
         let last = all_content.last().unwrap();
-        assert!(last.starts_with('╰'), "expected bottom border, got {:?}", last);
+        assert!(
+            last.starts_with('╰'),
+            "expected bottom border, got {:?}",
+            last
+        );
     }
 
     #[test]
@@ -613,20 +619,53 @@ mod tests {
         let lines: Vec<String> = text
             .lines
             .iter()
-            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
             .collect();
         // Top border
-        assert!(lines[0].contains('┌'), "expected top border: {:?}", lines[0]);
-        assert!(lines[0].contains('┬'), "expected column separator: {:?}", lines[0]);
+        assert!(
+            lines[0].contains('┌'),
+            "expected top border: {:?}",
+            lines[0]
+        );
+        assert!(
+            lines[0].contains('┬'),
+            "expected column separator: {:?}",
+            lines[0]
+        );
         assert!(lines[0].contains('┐'), "expected top-right: {:?}", lines[0]);
         // Header row
-        assert!(lines[1].contains("Name"), "header should contain Name: {:?}", lines[1]);
-        assert!(lines[1].contains("Age"), "header should contain Age: {:?}", lines[1]);
+        assert!(
+            lines[1].contains("Name"),
+            "header should contain Name: {:?}",
+            lines[1]
+        );
+        assert!(
+            lines[1].contains("Age"),
+            "header should contain Age: {:?}",
+            lines[1]
+        );
         // Header separator
-        assert!(lines[2].contains('├'), "expected header separator: {:?}", lines[2]);
+        assert!(
+            lines[2].contains('├'),
+            "expected header separator: {:?}",
+            lines[2]
+        );
         // Data rows
-        assert!(lines[3].contains("Alice"), "row should contain Alice: {:?}", lines[3]);
-        assert!(lines[4].contains("Bob"), "row should contain Bob: {:?}", lines[4]);
+        assert!(
+            lines[3].contains("Alice"),
+            "row should contain Alice: {:?}",
+            lines[3]
+        );
+        assert!(
+            lines[4].contains("Bob"),
+            "row should contain Bob: {:?}",
+            lines[4]
+        );
         // Bottom border
         let last = lines.last().unwrap();
         assert!(last.contains('└'), "expected bottom border: {:?}", last);
@@ -638,7 +677,11 @@ mod tests {
         let text = render(md, Color::Blue);
         // Line 1 is the header data row (line 0 is top border)
         let header_line = &text.lines[1];
-        let h1_span = header_line.spans.iter().find(|s| s.content.as_ref() == "H1").unwrap();
+        let h1_span = header_line
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref() == "H1")
+            .unwrap();
         assert!(h1_span.style.add_modifier.contains(Modifier::BOLD));
     }
 
@@ -647,12 +690,24 @@ mod tests {
         let md = "| A | B |\n|---|---|\n| **bold** | `code` |";
         let text = render(md, Color::Blue);
         // Find the bold span in a data row
-        let bold_span = text.lines.iter().flat_map(|l| &l.spans)
+        let bold_span = text
+            .lines
+            .iter()
+            .flat_map(|l| &l.spans)
             .find(|s| s.content.as_ref() == "bold");
         assert!(bold_span.is_some(), "should contain 'bold' span");
-        assert!(bold_span.unwrap().style.add_modifier.contains(Modifier::BOLD));
+        assert!(
+            bold_span
+                .unwrap()
+                .style
+                .add_modifier
+                .contains(Modifier::BOLD)
+        );
         // Find the code span
-        let code_span = text.lines.iter().flat_map(|l| &l.spans)
+        let code_span = text
+            .lines
+            .iter()
+            .flat_map(|l| &l.spans)
             .find(|s| s.content.as_ref() == "code");
         assert!(code_span.is_some(), "should contain 'code' span");
         assert_eq!(code_span.unwrap().style.bg, Some(Color::DarkGray));
@@ -661,13 +716,15 @@ mod tests {
     #[test]
     fn tabs_expanded_to_spaces() {
         let text = render("```\n\tindented\n```", Color::Blue);
-        let has_spaces = text.lines.iter().any(|l| {
-            l.spans.iter().any(|s| s.content.starts_with("    "))
-        });
+        let has_spaces = text
+            .lines
+            .iter()
+            .any(|l| l.spans.iter().any(|s| s.content.starts_with("    ")));
         assert!(has_spaces, "tabs should be expanded to 4 spaces");
-        let has_tabs = text.lines.iter().any(|l| {
-            l.spans.iter().any(|s| s.content.contains('\t'))
-        });
+        let has_tabs = text
+            .lines
+            .iter()
+            .any(|l| l.spans.iter().any(|s| s.content.contains('\t')));
         assert!(!has_tabs, "no raw tabs should remain");
     }
 }

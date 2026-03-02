@@ -41,14 +41,17 @@ use crate::core::config::ResolvedConfig;
 use crate::core::session;
 use crate::core::state::App;
 use crate::inference::Effort;
+use crate::inference::model_discovery;
 use crate::inference::{
     CompletionProvider, CompletionRequest, ContextItem, LmStudioProvider, OpenRouterProvider,
     StreamChunk,
 };
 use crate::tui::component::EventHandler;
-use crate::tui::components::{InputBox, InputEvent, MessageListState, ModelPickerState, SessionManagerState};
 use crate::tui::components::model_picker::ModelPickerEvent;
 use crate::tui::components::session_manager::SessionEvent;
+use crate::tui::components::{
+    InputBox, InputEvent, MessageListState, ModelPickerState, SessionManagerState,
+};
 use crate::tui::event::{TuiEvent, poll_event_immediate, poll_event_timeout};
 
 /// Modal input mode: determines how keyboard events are interpreted.
@@ -223,9 +226,10 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
                 continue;
             }
 
-            // Ctrl+M opens model picker
+            // Ctrl+M opens model picker and spawns async model fetch
             if matches!(event, TuiEvent::OpenModelPicker) {
                 tui.model_picker = Some(ModelPickerState::new(app.available_models.clone()));
+                spawn_model_fetch(&app, tx.clone());
                 continue;
             }
 
@@ -242,14 +246,9 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
                             // Rebuild the provider for the new model
                             app.provider = build_provider(&new_config);
                             app.model_name = entry.name.clone();
-                            app.status_message = format!(
-                                "Switched to {} ({})",
-                                entry.name, entry.provider
-                            );
-                            info!(
-                                "Model switched: {} ({})",
-                                entry.name, entry.provider
-                            );
+                            app.status_message =
+                                format!("Switched to {} ({})", entry.name, entry.provider);
+                            info!("Model switched: {} ({})", entry.name, entry.provider);
                             tui.model_picker = None;
                         }
                         ModelPickerEvent::Dismiss => {
@@ -500,6 +499,17 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
         // Handle background task actions (streaming responses)
         while let Ok(action) = rx.try_recv() {
             needs_redraw = true;
+
+            // Intercept ModelsFetched — this is TUI-only state, not core business logic.
+            // If picker is closed by the time results arrive, silently drop them.
+            if let Action::ModelsFetched(models) = action {
+                debug!("Received {} fetched models", models.len());
+                if let Some(ref mut mp) = tui.model_picker {
+                    mp.set_fetched_models(models);
+                }
+                continue;
+            }
+
             debug!("Event loop received: {:?}", action);
             let effect = update(&mut app, action);
             match effect {
@@ -696,4 +706,53 @@ fn spawn_request(app: &App, tx: mpsc::Sender<Action>) -> Vec<tokio::task::AbortH
     });
 
     vec![stream_handle.abort_handle(), forward_handle.abort_handle()]
+}
+
+/// Spawns a background task to fetch models from all configured providers.
+///
+/// Runs OpenRouter and LM Studio fetches concurrently via `tokio::join!`.
+/// LM Studio has a 3s timeout so it won't block if the server isn't running.
+/// Results are deduped against pinned models in `ModelPickerState::set_fetched_models()`.
+fn spawn_model_fetch(app: &App, tx: mpsc::Sender<Action>) {
+    let openrouter_base_url = app.openrouter_base_url.clone();
+    let openrouter_api_key = app.openrouter_api_key.clone();
+    let lmstudio_base_url = app.lmstudio_base_url.clone();
+
+    tokio::spawn(async move {
+        let (or_result, lms_result) = tokio::join!(
+            async {
+                match openrouter_api_key {
+                    Some(ref key) => {
+                        model_discovery::fetch_openrouter_models(&openrouter_base_url, key).await
+                    }
+                    None => {
+                        warn!("No OpenRouter API key — skipping model fetch");
+                        Ok(Vec::new())
+                    }
+                }
+            },
+            async { model_discovery::fetch_lmstudio_models(&lmstudio_base_url).await }
+        );
+
+        let mut all_models = Vec::new();
+
+        match or_result {
+            Ok(models) => all_models.extend(models),
+            Err(e) => warn!("OpenRouter model fetch failed: {}", e),
+        }
+
+        match lms_result {
+            Ok(models) => all_models.extend(models),
+            Err(e) => debug!(
+                "LM Studio model fetch failed (server may not be running): {}",
+                e
+            ),
+        }
+
+        info!("Model fetch complete: {} total models", all_models.len());
+
+        if tx.send(Action::ModelsFetched(all_models)).is_err() {
+            warn!("Failed to send ModelsFetched: receiver dropped");
+        }
+    });
 }

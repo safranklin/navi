@@ -25,7 +25,7 @@
 //! This keeps things predictable, so no surprise mutations.
 
 use crate::core::config::{
-    self, ModelEntry, ResolvedConfig, DEFAULT_MAX_AGENTIC_ROUNDS, DEFAULT_MAX_OUTPUT_TOKENS,
+    self, DEFAULT_MAX_AGENTIC_ROUNDS, DEFAULT_MAX_OUTPUT_TOKENS, ModelEntry, ResolvedConfig,
 };
 use crate::core::tools::ToolRegistry;
 use crate::inference::{CompletionProvider, Context, Effort, ToolDefinition, UsageStats};
@@ -95,10 +95,7 @@ impl App {
     }
 
     /// Creates an App from resolved config values.
-    pub fn from_config(
-        provider: Arc<dyn CompletionProvider>,
-        config: &ResolvedConfig,
-    ) -> Self {
+    pub fn from_config(provider: Arc<dyn CompletionProvider>, config: &ResolvedConfig) -> Self {
         Self {
             provider,
             context: Context::with_system_prompt(config.system_prompt.clone()),
