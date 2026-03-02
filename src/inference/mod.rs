@@ -1,3 +1,4 @@
+pub mod model_discovery;
 pub mod provider;
 pub mod providers;
 pub mod types;

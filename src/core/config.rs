@@ -52,7 +52,7 @@ pub struct LmStudioConfig {
     pub base_url: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct ModelEntry {
     pub name: String,
     pub provider: String,
@@ -139,7 +139,10 @@ pub fn load_config() -> Result<NaviConfig, ConfigError> {
     };
 
     if !path.exists() {
-        info!("No config file found, generating default at {}", path.display());
+        info!(
+            "No config file found, generating default at {}",
+            path.display()
+        );
         generate_default_config(&path);
         return Ok(NaviConfig::default());
     }
@@ -308,7 +311,11 @@ mod tests {
         assert_eq!(resolved.max_agentic_rounds, DEFAULT_MAX_AGENTIC_ROUNDS);
         assert_eq!(resolved.max_output_tokens, DEFAULT_MAX_OUTPUT_TOKENS);
         assert_eq!(resolved.effort, Effort::default());
-        assert!(resolved.system_prompt.starts_with("You are a helpful assistant"));
+        assert!(
+            resolved
+                .system_prompt
+                .starts_with("You are a helpful assistant")
+        );
     }
 
     #[test]
@@ -378,10 +385,7 @@ provider = "lmstudio"
             Some("openrouter")
         );
         assert_eq!(config.general.max_agentic_rounds, Some(10));
-        assert_eq!(
-            config.openrouter.api_key.as_deref(),
-            Some("sk-test-123")
-        );
+        assert_eq!(config.openrouter.api_key.as_deref(), Some("sk-test-123"));
         assert_eq!(config.models.len(), 2);
         assert_eq!(config.models[0].name, "anthropic/claude-sonnet-4");
         assert_eq!(config.models[1].description, None);
