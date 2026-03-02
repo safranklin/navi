@@ -22,6 +22,9 @@ textwrap = "0.16.2"
 pulldown-cmark = "0.13"
 syntect = "5.3"
 unicode-width = "0.2"
+uuid = { version = "1", features = ["v4"] }
+dirs = "6"
+chrono = { version = "0.4", features = ["serde"] }
 
 [dev-dependencies]
 wiremock = "0.6"        # Mock HTTP server for integration tests

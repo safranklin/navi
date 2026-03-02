@@ -39,9 +39,10 @@ pub enum TuiEvent {
     ScrollPageDown,
 
     MouseMove(u16, u16),
-    MouseClick(u16, u16), // Left click — col, row
-    CycleEffort,          // Ctrl+R to cycle reasoning effort
-    Resize,               // Terminal resized — triggers redraw
+    MouseClick(u16, u16),     // Left click — col, row
+    CycleEffort,              // Ctrl+R to cycle reasoning effort
+    OpenSessionManager,       // Ctrl+O to open session browser
+    Resize,                   // Terminal resized — triggers redraw
 }
 
 /// Poll for an event without blocking (returns immediately)
@@ -71,6 +72,10 @@ pub fn poll_event_timeout(timeout: std::time::Duration) -> Option<TuiEvent> {
                     (KeyModifiers::CONTROL, KeyCode::Char('c')) => Some(TuiEvent::ForceQuit),
                     // Ctrl+R cycles reasoning effort
                     (KeyModifiers::CONTROL, KeyCode::Char('r')) => Some(TuiEvent::CycleEffort),
+                    // Ctrl+O opens session manager
+                    (KeyModifiers::CONTROL, KeyCode::Char('o')) => {
+                        Some(TuiEvent::OpenSessionManager)
+                    }
                     // Ctrl+J inserts newline (ASCII LF; Ctrl+Enter sends this in most terminals)
                     (KeyModifiers::CONTROL, KeyCode::Char('j')) => Some(TuiEvent::InputChar('\n')),
 

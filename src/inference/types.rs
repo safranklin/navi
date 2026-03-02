@@ -53,7 +53,7 @@ pub enum ContextItem {
 }
 
 /// Represents the model input context, holding a collection of context items.
-#[derive(Serialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Context {
     /// Polymorphic collection: messages, tool calls, and tool results.
     pub items: Vec<ContextItem>,
@@ -211,7 +211,7 @@ impl Context {
 
 /// Effort level for reasoning tokens
 /// Higher effort = more reasoning tokens = better quality but higher cost
-#[derive(Serialize, Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
 pub enum Effort {
     /// Thorough analysis - model takes more time to reason
     #[serde(rename = "high")]
@@ -300,7 +300,7 @@ pub enum StreamChunk {
 ///
 /// All fields are optional — providers vary in what they report.
 /// Accumulated across agentic rounds via `accumulate()`.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UsageStats {
     pub input_tokens: Option<u32>,
     pub output_tokens: Option<u32>,

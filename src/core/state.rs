@@ -52,6 +52,8 @@ pub struct App {
     /// Per-message usage stats, keyed by context item index.
     /// Each model message gets the stats from its agentic round.
     pub message_stats: HashMap<usize, UsageStats>,
+    /// Active session ID (None = unsaved new session).
+    pub current_session_id: Option<String>,
 }
 
 impl App {
@@ -71,6 +73,7 @@ impl App {
             had_tool_calls: false,
             usage_stats: UsageStats::default(),
             message_stats: HashMap::new(),
+            current_session_id: None,
         }
     }
 

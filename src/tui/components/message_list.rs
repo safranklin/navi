@@ -250,11 +250,17 @@ impl<'a> Component for MessageList<'a> {
         };
         let canvas_height = total_height + logo_padding;
 
-        // 2. Clamp scroll offset to prevent overscrolling past content.
-        // Skip when auto-scrolling: scroll_to_bottom targets canvas_height
-        // (which includes logo padding), while clamp uses content height only.
+        // 2. Resolve scroll position before computing visible_range.
         self.state.viewport_height = area.height;
-        if !self.state.stick_to_bottom {
+        if self.state.stick_to_bottom {
+            // Pre-set the offset so visible_range covers the bottom of the canvas.
+            // Without this, a freshly-loaded session starts at offset 0, renders
+            // only the top items, then scroll_to_bottom jumps to an empty region.
+            let bottom_y = canvas_height.saturating_sub(area.height);
+            self.state
+                .scroll_state
+                .set_offset(Position { x: 0, y: bottom_y });
+        } else {
             self.state.clamp_scroll();
         }
 

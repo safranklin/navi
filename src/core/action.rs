@@ -13,8 +13,9 @@
 //! This makes everything testable: `assert_eq!(update(state, action), expected)`.
 //! And debuggable: log every action, replay the exact session.
 
+use crate::core::session::SessionData;
 use crate::core::state::{App, MAX_AGENTIC_ROUNDS};
-use crate::inference::{ToolCall, ToolResult, UsageStats};
+use crate::inference::{Context, ToolCall, ToolResult, UsageStats};
 use log::{debug, warn};
 
 #[derive(Debug)]
@@ -44,6 +45,10 @@ pub enum Action {
     },
     // User cancelled the in-progress generation
     CancelGeneration,
+    // Replace context with a loaded session
+    LoadSession(SessionData),
+    // Reset to a fresh conversation
+    NewSession,
 }
 
 #[derive(Debug, PartialEq)]
@@ -53,6 +58,7 @@ pub enum Effect {
     Quit,
     SpawnRequest,
     ExecuteTool(ToolCall), // Run a tool asynchronously
+    SaveSession,           // Persist current session to disk
 }
 
 /// Checks whether the current agentic round is fully complete (stream finished
@@ -87,7 +93,7 @@ fn check_round_complete(app_state: &mut App) -> Effect {
             // Pure text response — no tools were called
             app_state.is_loading = false;
             app_state.status_message = app_state.usage_stats.display_summary();
-            Effect::Render
+            Effect::SaveSession
         }
     } else if !app_state.pending_tool_calls.is_empty() {
         app_state.status_message = format!(
@@ -200,6 +206,40 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
             app_state.status_message = String::from("Cancelled.");
             Effect::Render
         }
+        Action::LoadSession(data) => {
+            // Rebuild fresh context with system directive, then push loaded items
+            let mut context = Context::new();
+            for item in data.items {
+                context.items.push(item);
+            }
+            app_state.context = context;
+            app_state.current_session_id = Some(data.meta.id);
+            app_state.model_name = data.meta.model_name;
+            app_state.is_loading = false;
+            app_state.pending_tool_calls.clear();
+            app_state.stream_done = false;
+            app_state.had_tool_calls = false;
+            app_state.agentic_rounds = 0;
+            app_state.usage_stats = UsageStats::default();
+            app_state.message_stats.clear();
+            app_state.error = None;
+            app_state.status_message = format!("Loaded: {}", data.meta.title);
+            Effect::Render
+        }
+        Action::NewSession => {
+            app_state.context = Context::new();
+            app_state.current_session_id = None;
+            app_state.is_loading = false;
+            app_state.pending_tool_calls.clear();
+            app_state.stream_done = false;
+            app_state.had_tool_calls = false;
+            app_state.agentic_rounds = 0;
+            app_state.usage_stats = UsageStats::default();
+            app_state.message_stats.clear();
+            app_state.error = None;
+            app_state.status_message = String::from("New session.");
+            Effect::Render
+        }
     }
 }
 
@@ -275,7 +315,7 @@ mod tests {
 
         assert!(!app.is_loading);
         assert_eq!(app.status_message, "Response complete.");
-        assert_eq!(effect, Effect::Render);
+        assert_eq!(effect, Effect::SaveSession);
     }
 
     fn make_tool_call(name: &str, call_id: &str) -> crate::inference::ToolCall {
@@ -484,7 +524,7 @@ mod tests {
         assert!(app.status_message.contains("100 in"));
         assert!(app.status_message.contains("30 out"));
         assert!(app.status_message.contains("TTFT 250ms"));
-        assert_eq!(effect, Effect::Render);
+        assert_eq!(effect, Effect::SaveSession);
     }
 
     #[test]

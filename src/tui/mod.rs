@@ -39,6 +39,7 @@ use crossterm::execute;
 
 use crate::Provider;
 use crate::core::action::{Action, Effect, update};
+use crate::core::session;
 use crate::core::state::App;
 use crate::inference::Effort;
 use crate::inference::{
@@ -46,7 +47,8 @@ use crate::inference::{
     StreamChunk,
 };
 use crate::tui::component::EventHandler;
-use crate::tui::components::{InputBox, InputEvent, MessageListState};
+use crate::tui::components::{InputBox, InputEvent, MessageListState, SessionManagerState};
+use crate::tui::components::session_manager::SessionEvent;
 use crate::tui::event::{TuiEvent, poll_event_immediate, poll_event_timeout};
 
 /// Modal input mode: determines how keyboard events are interpreted.
@@ -67,6 +69,8 @@ pub struct TuiState {
     pub input_mode: InputMode,
     // Animation state
     pub pulse_value: f32,
+    // Session manager overlay (None = hidden)
+    pub session_manager: Option<SessionManagerState>,
 }
 
 impl TuiState {
@@ -76,6 +80,7 @@ impl TuiState {
             input_box: InputBox::new(initial_effort),
             input_mode: InputMode::Input, // User expects to type immediately
             pulse_value: 0.0,
+            session_manager: None,
         }
     }
 }
@@ -195,6 +200,59 @@ pub fn run(provider_choice: Provider) -> std::io::Result<()> {
                 let effect = update(&mut app, Action::Quit);
                 if effect == Effect::Quit {
                     should_quit = true;
+                }
+                continue;
+            }
+
+            // Ctrl+O opens session manager
+            if matches!(event, TuiEvent::OpenSessionManager) {
+                let index = session::load_index().unwrap_or_default();
+                tui.session_manager = Some(SessionManagerState::new(index.sessions));
+                continue;
+            }
+
+            // When session manager is open, route all events to it
+            if let Some(ref mut sm) = tui.session_manager {
+                if let Some(session_event) = sm.handle_event(&event) {
+                    match session_event {
+                        SessionEvent::Load(id) => {
+                            match session::load_session(&id) {
+                                Ok(data) => {
+                                    let effect = update(&mut app, Action::LoadSession(data));
+                                    if effect == Effect::Quit {
+                                        should_quit = true;
+                                    }
+                                    tui.message_list = MessageListState::new();
+                                }
+                                Err(e) => {
+                                    warn!("Failed to load session {}: {}", id, e);
+                                    app.status_message = format!("Load failed: {}", e);
+                                }
+                            }
+                            tui.session_manager = None;
+                        }
+                        SessionEvent::CreateNew => {
+                            let effect = update(&mut app, Action::NewSession);
+                            if effect == Effect::Quit {
+                                should_quit = true;
+                            }
+                            tui.message_list = MessageListState::new();
+                            tui.session_manager = None;
+                        }
+                        SessionEvent::Delete(id) => {
+                            if let Err(e) = session::delete_session(&id) {
+                                warn!("Failed to delete session {}: {}", id, e);
+                            }
+                            sm.remove_session(&id);
+                            // If we deleted the active session, clear the ID
+                            if app.current_session_id.as_deref() == Some(&id) {
+                                app.current_session_id = None;
+                            }
+                        }
+                        SessionEvent::Dismiss => {
+                            tui.session_manager = None;
+                        }
+                    }
                 }
                 continue;
             }
@@ -403,10 +461,17 @@ pub fn run(provider_choice: Provider) -> std::io::Result<()> {
                 Effect::ExecuteTool(tool_call) => {
                     spawn_tool_execution(tool_call, app.registry.clone(), tx.clone());
                 }
+                Effect::SaveSession => {
+                    session::save_current_session(&mut app);
+                }
                 _ => {}
             }
         }
     }
+
+    // Save on exit if there's content
+    session::save_current_session(&mut app);
+
     ratatui::restore();
     Ok(())
 }

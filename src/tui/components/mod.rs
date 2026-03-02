@@ -86,5 +86,7 @@ pub mod message_list;
 pub use message_list::{MessageList, MessageListState};
 pub mod landing;
 pub mod logo;
+pub mod session_manager;
 pub mod tool_message;
 pub use landing::LandingPage;
+pub use session_manager::{SessionManager, SessionManagerState};
