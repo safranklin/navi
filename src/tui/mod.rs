@@ -226,7 +226,7 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
                 continue;
             }
 
-            // Ctrl+M opens model picker and spawns async model fetch
+            // Ctrl+P opens model picker and spawns async model fetch
             if matches!(event, TuiEvent::OpenModelPicker) {
                 tui.model_picker = Some(ModelPickerState::new(app.available_models.clone()));
                 spawn_model_fetch(&app, tx.clone());

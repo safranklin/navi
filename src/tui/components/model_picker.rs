@@ -1,6 +1,6 @@
 //! # Model Picker Component
 //!
-//! Full-screen overlay for switching models at runtime. Opened with Ctrl+M.
+//! Full-screen overlay for switching models at runtime. Opened with Ctrl+P.
 //! Supports cross-provider switching (OpenRouter ↔ LM Studio).
 //!
 //! Models come from two sources:

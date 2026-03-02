@@ -5,7 +5,7 @@
 //! a provider can fail to list models but still serve completions fine.
 //!
 //! Each function creates its own `reqwest::Client` since this runs at most
-//! once per picker open (Ctrl+M). No persistent connection pool needed.
+//! once per picker open (Ctrl+P). No persistent connection pool needed.
 
 use log::{debug, info, warn};
 use serde::Deserialize;
