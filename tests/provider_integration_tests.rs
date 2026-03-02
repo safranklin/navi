@@ -82,6 +82,7 @@ data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_or_001\"}}
         context: &context,
         effort: Effort::None,
         tools: &[],
+        max_output_tokens: None,
     };
 
     let (tx, rx) = mpsc::channel(100);
@@ -127,6 +128,7 @@ data: {\"type\":\"response.completed\"}
         context: &context,
         effort: Effort::High,
         tools: &[],
+        max_output_tokens: None,
     };
 
     let (tx, rx) = mpsc::channel(100);
@@ -157,6 +159,7 @@ async fn test_openrouter_api_error_response() {
         context: &context,
         effort: Effort::None,
         tools: &[],
+        max_output_tokens: None,
     };
 
     let (tx, _rx) = mpsc::channel(100);
@@ -194,6 +197,7 @@ data: {\"type\":\"response.output_text.delta\",\"delta\":\" world\"}
         context: &context,
         effort: Effort::None,
         tools: &[],
+        max_output_tokens: None,
     };
 
     let (tx, rx) = mpsc::channel(1);
@@ -234,7 +238,7 @@ data: {\"response\":{\"id\":\"resp_lms_001\"}}
         .mount(&mock_server)
         .await;
 
-    let provider = LmStudioProvider::new(Some(mock_server.uri()));
+    let provider = LmStudioProvider::new(mock_server.uri());
 
     let context = create_test_context();
     let request = CompletionRequest {
@@ -242,6 +246,7 @@ data: {\"response\":{\"id\":\"resp_lms_001\"}}
         context: &context,
         effort: Effort::None,
         tools: &[],
+        max_output_tokens: None,
     };
 
     let (tx, rx) = mpsc::channel(100);
@@ -276,7 +281,7 @@ data: {\"id\":\"test\"}
         .mount(&mock_server)
         .await;
 
-    let provider = LmStudioProvider::new(Some(mock_server.uri()));
+    let provider = LmStudioProvider::new(mock_server.uri());
 
     let context = create_test_context();
     let request = CompletionRequest {
@@ -284,6 +289,7 @@ data: {\"id\":\"test\"}
         context: &context,
         effort: Effort::Medium,
         tools: &[],
+        max_output_tokens: None,
     };
 
     let (tx, rx) = mpsc::channel(100);
@@ -324,7 +330,7 @@ data: {\"id\":\"test\"}
         .mount(&mock_server)
         .await;
 
-    let provider = LmStudioProvider::new(Some(mock_server.uri()));
+    let provider = LmStudioProvider::new(mock_server.uri());
 
     let context = create_test_context();
     let request = CompletionRequest {
@@ -332,6 +338,7 @@ data: {\"id\":\"test\"}
         context: &context,
         effort: Effort::None,
         tools: &[],
+        max_output_tokens: None,
     };
 
     let (tx, rx) = mpsc::channel(100);
@@ -362,7 +369,7 @@ async fn test_effort_levels_affect_request() {
         .mount(&mock_server)
         .await;
 
-    let provider = LmStudioProvider::new(Some(mock_server.uri()));
+    let provider = LmStudioProvider::new(mock_server.uri());
     let context = create_test_context();
 
     // Test all effort levels
@@ -378,6 +385,7 @@ async fn test_effort_levels_affect_request() {
             context: &context,
             effort,
             tools: &[],
+            max_output_tokens: None,
         };
 
         let (tx, _rx) = mpsc::channel(100);

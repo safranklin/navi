@@ -286,14 +286,9 @@ pub struct LmStudioProvider {
 }
 
 impl LmStudioProvider {
-    pub fn new(base_url: Option<String>) -> Self {
-        let env_url = std::env::var("LM_STUDIO_BASE_URL").ok();
-        let final_url = base_url
-            .or(env_url)
-            .unwrap_or_else(|| "http://localhost:1234/v1".to_string());
-
+    pub fn new(base_url: String) -> Self {
         Self {
-            base_url: final_url,
+            base_url,
             client: reqwest::Client::new(),
         }
     }
@@ -347,7 +342,7 @@ impl CompletionProvider for LmStudioProvider {
             stream: Some(true),
             reasoning,
             tools: tools_to_api(request.tools),
-            max_output_tokens: Some(16384),
+            max_output_tokens: request.max_output_tokens,
         };
 
         info!(
@@ -733,35 +728,14 @@ mod tests {
     }
 
     #[test]
-    fn test_lmstudio_provider_new_with_env_var() {
-        unsafe {
-            std::env::set_var("LM_STUDIO_BASE_URL", "http://test:1234");
-        }
-        let provider = LmStudioProvider::new(None);
-        assert_eq!(provider.base_url, "http://test:1234");
-        unsafe {
-            std::env::remove_var("LM_STUDIO_BASE_URL");
-        }
-    }
-
-    #[test]
     fn test_lmstudio_provider_new_with_explicit_url() {
-        unsafe {
-            std::env::set_var("LM_STUDIO_BASE_URL", "http://env:1234");
-        }
-        let provider = LmStudioProvider::new(Some("http://explicit:5678".to_string()));
+        let provider = LmStudioProvider::new("http://explicit:5678".to_string());
         assert_eq!(provider.base_url, "http://explicit:5678");
-        unsafe {
-            std::env::remove_var("LM_STUDIO_BASE_URL");
-        }
     }
 
     #[test]
-    fn test_lmstudio_provider_new_with_defaults() {
-        unsafe {
-            std::env::remove_var("LM_STUDIO_BASE_URL");
-        }
-        let provider = LmStudioProvider::new(None);
+    fn test_lmstudio_provider_new_with_default_url() {
+        let provider = LmStudioProvider::new("http://localhost:1234/v1".to_string());
         assert_eq!(provider.base_url, "http://localhost:1234/v1");
     }
 

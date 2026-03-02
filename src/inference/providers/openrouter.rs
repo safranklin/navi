@@ -366,7 +366,7 @@ impl CompletionProvider for OpenRouterProvider {
             stream: Some(true),
             reasoning,
             tools: tools_to_api(request.tools),
-            max_output_tokens: Some(16384),
+            max_output_tokens: request.max_output_tokens,
         };
 
         info!(

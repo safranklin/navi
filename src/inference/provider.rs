@@ -37,6 +37,7 @@ pub struct CompletionRequest<'a> {
     pub model: &'a str,
     pub effort: Effort,
     pub tools: &'a [ToolDefinition], // empty slice = no tools
+    pub max_output_tokens: Option<u32>,
 }
 
 #[async_trait]

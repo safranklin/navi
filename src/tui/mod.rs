@@ -128,7 +128,10 @@ pub fn run(provider_choice: Provider) -> std::io::Result<()> {
             env::var("OPENROUTER_API_KEY").expect("OPENROUTER_API_KEY must be set"),
             None,
         )),
-        Provider::LmStudio => Arc::new(LmStudioProvider::new(None)),
+        Provider::LmStudio => Arc::new(LmStudioProvider::new(
+            std::env::var("LM_STUDIO_BASE_URL")
+                .unwrap_or_else(|_| "http://localhost:1234/v1".to_string()),
+        )),
     };
 
     let model_name = env::var("PRIMARY_MODEL_NAME").expect("PRIMARY_MODEL_NAME must be set");
@@ -525,6 +528,7 @@ fn spawn_request(app: &App, tx: mpsc::Sender<Action>) -> Vec<tokio::task::AbortH
     let model = app.model_name.clone();
     let effort = app.effort;
     let tools = app.tool_definitions();
+    let max_output_tokens = Some(app.max_output_tokens);
 
     // Async channel for streaming chunks
     let (chunk_tx, mut chunk_rx) = tokio::sync::mpsc::channel::<StreamChunk>(100);
@@ -539,6 +543,7 @@ fn spawn_request(app: &App, tx: mpsc::Sender<Action>) -> Vec<tokio::task::AbortH
             model: &model,
             effort,
             tools: &tools,
+            max_output_tokens,
         };
 
         if let Err(e) = provider.stream_completion(request, chunk_tx).await {
