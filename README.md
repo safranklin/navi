@@ -6,7 +6,37 @@ I use tools like Claude Code and OpenCode daily and wanted to understand how the
 
 Named after Navi from Ocarina of Time.
 
-![Navi demo](docs/demo.gif)
+## Demos
+
+### Startup & Model Switching
+
+Session manager on startup, model picker with live search, switch providers on the fly.
+
+![Startup demo](docs/demo-start.gif)
+
+### Markdown Conversation
+
+Full markdown rendering: syntax-highlighted code blocks, tables, lists, blockquotes.
+
+![Conversation demo](docs/demo-conversation.gif)
+
+### Agentic Tool Use
+
+Chained tool calls with collapsible result blocks. The model calls add → multiply → divide to solve `((3+3) * 5) / 2`.
+
+![Tool use demo](docs/demo-tools.gif)
+
+### Emacs-Style Editing
+
+Kill/yank, word deletion, home/end, and input history recall.
+
+![Editing demo](docs/demo-editing.gif)
+
+### Modes & Reasoning Effort
+
+Cycle reasoning effort (Auto → Low → Medium → High), then navigate messages in cursor mode.
+
+![Modes demo](docs/demo-modes.gif)
 
 ## Why
 
@@ -21,29 +51,71 @@ Navi exists for three reasons:
 ## Quick Start
 
 ```bash
-# 1. Clone and enter
+# Clone and build
 git clone <repo-url> && cd navi
-
-# 2. Set up environment
-cp .env.example .env
-# Edit .env with your API key and model
-
-# 3. Run
 cargo run
 ```
 
+On first run, Navi generates `~/.navi/config.toml` with commented defaults. Edit it to add your API key and preferred model.
+
+## Features
+
+- **Multi-provider support** — OpenRouter (cloud) and LM Studio (local), switchable at runtime
+- **Agentic tool loop** — up to 20 rounds of chained tool calls with parallel dispatch
+- **Streaming responses** — SSE streaming with animated spinner and pulsing text
+- **Full markdown rendering** — syntax-highlighted code blocks, tables, lists, blockquotes, task lists
+- **Emacs-style editing** — word navigation, kill/yank buffer, line kills, word deletion
+- **Input history** — Up/Down recalls previous messages, preserves unsent draft
+- **Session management** — persistent sessions with rename, delete, sequential numbering
+- **Model picker** — live search across pinned and fetched models, switch without restarting
+- **Reasoning effort** — cycle through Auto/Low/Medium/High/Off per message
+- **Cursor mode** — keyboard navigation through the conversation, expand/collapse tool calls
+- **Bracketed paste** — paste multi-line text with preserved newlines
+
 ## Configuration
 
-Create a `.env` file (or copy `.env.example`):
+Config lives at `~/.navi/config.toml`. Environment variables and CLI flags override it.
 
+```toml
+[general]
+default_provider = "openrouter"
+default_model = "anthropic/claude-sonnet-4"
+max_agentic_rounds = 20
+max_output_tokens = 16384
+reasoning_effort = "auto"           # auto | low | medium | high | none
+# system_prompt = "..."             # inline system prompt
+# system_prompt_file = "prompt.md"  # or load from ~/.navi/prompt.md
+
+[openrouter]
+api_key = "your-key-here"
+# base_url = "https://openrouter.ai/api/v1"
+
+[lmstudio]
+# base_url = "http://localhost:1234/v1"
+
+# Pin models to the top of the model picker
+[[models]]
+name = "anthropic/claude-sonnet-4"
+provider = "openrouter"
+description = "Fast and capable"
+
+[[models]]
+name = "qwen3-8b"
+provider = "lmstudio"
+description = "Local 8B model"
 ```
-OPENROUTER_API_KEY=your-key-here
-PRIMARY_MODEL_NAME=anthropic/claude-sonnet-4
-```
 
-### Providers
+### Environment Variables
 
-Navi supports multiple LLM backends, selected via CLI flag:
+| Variable | Overrides |
+|----------|-----------|
+| `OPENROUTER_API_KEY` | `openrouter.api_key` |
+| `OPENROUTER_BASE_URL` | `openrouter.base_url` |
+| `LM_STUDIO_BASE_URL` | `lmstudio.base_url` |
+| `PRIMARY_MODEL_NAME` | `general.default_model` |
+| `NAVI_PROVIDER` | `general.default_provider` |
+
+### CLI Flags
 
 ```bash
 cargo run                          # OpenRouter (default)
@@ -51,28 +123,18 @@ cargo run -- --provider lmstudio   # LM Studio (local)
 cargo run -- -p lmstudio           # Short form
 ```
 
+### Providers
+
 | Provider | Description | Auth |
 |----------|-------------|------|
-| **OpenRouter** | Cloud gateway to many models ([openrouter.ai](https://openrouter.ai/)) | `OPENROUTER_API_KEY` env var |
+| **OpenRouter** | Cloud gateway to many models ([openrouter.ai](https://openrouter.ai/)) | `OPENROUTER_API_KEY` |
 | **LM Studio** | Local inference server (v0.3.29+) | None (local) |
-
-LM Studio connects to `http://localhost:1234/v1` by default. Override with `LM_STUDIO_BASE_URL`.
 
 Both providers use the Responses API with SSE streaming.
 
-### Reasoning Effort
-
-Controls how much the model reasons before responding. Cycle with `Ctrl+R`:
-
-**Auto** → Low → Medium → High → Off → Auto
-
-- **Auto** (default): Model decides whether and how much to reason.
-- **Low/Medium/High**: Explicit reasoning effort levels.
-- **Off**: Disables reasoning entirely.
-
 ## Controls
 
-Navi uses a modal input system: **Input mode** (default) for typing, and **Cursor mode** for navigating messages.
+Navi uses a modal input system: **Input mode** (default) for typing, and **Cursor mode** for navigating messages. Overlays (session manager, model picker) float above both.
 
 ### Input Mode
 
@@ -80,27 +142,53 @@ Navi uses a modal input system: **Input mode** (default) for typing, and **Curso
 |-----|--------|
 | `Enter` | Send message |
 | `Shift+Enter` / `Ctrl+J` | Insert newline |
-| `Esc` | Switch to Cursor mode |
+| `Esc` | Cancel generation (if loading), otherwise enter Cursor mode |
 | `Ctrl+C` | Quit |
-| `←` `→` `↑` `↓` | Move cursor in input |
+| `←` `→` | Move cursor |
+| `↑` `↓` | Move cursor; at input boundary, navigate input history |
 | `Home` / `End` | Jump to start/end of line |
 | `Ctrl+A` / `Ctrl+E` | Start/end of line (Emacs) |
 | `Alt+←` / `Alt+→` | Move by word |
-| `Backspace` / `Delete` | Delete characters |
+| `Backspace` / `Delete` | Delete character |
 | `Ctrl+W` / `Alt+Backspace` | Delete word backward |
 | `Alt+D` | Delete word forward |
 | `Ctrl+U` | Kill to line start |
 | `Ctrl+K` | Kill to line end |
-| `Ctrl+Y` | Yank (paste from kill ring) |
+| `Ctrl+Y` | Yank (paste from kill buffer) |
 | `Ctrl+R` | Cycle reasoning effort |
+| `Ctrl+P` | Open model picker |
+| `Ctrl+O` | Open session manager |
 
 ### Cursor Mode
 
 | Key | Action |
 |-----|--------|
 | `↑` / `↓` | Navigate messages |
-| `Enter` or typing | Switch back to Input mode |
+| `Space` | Expand/collapse tool call block |
+| `Enter` or any character | Switch back to Input mode |
+| `Esc` | Cancel generation (if loading) |
 | `Ctrl+C` | Quit |
+
+### Session Manager (`Ctrl+O`)
+
+| Key | Action |
+|-----|--------|
+| `↑` / `↓` | Move selection |
+| `Enter` | Load session |
+| `n` | New session |
+| `r` | Rename selected session (inline edit) |
+| `d` `d` | Delete session (press twice to confirm) |
+| `Esc` | Dismiss |
+
+### Model Picker (`Ctrl+P`)
+
+| Key | Action |
+|-----|--------|
+| Type to search | Live filter by name, provider, or description |
+| `↑` / `↓` | Move selection |
+| `Enter` | Switch to selected model |
+| `Backspace` | Clear search character |
+| `Esc` | Clear search (first), dismiss (second) |
 
 ### Always Active
 
@@ -108,7 +196,7 @@ Navi uses a modal input system: **Input mode** (default) for typing, and **Curso
 |-----|--------|
 | `Page Up` / `Page Down` | Scroll messages |
 | `Mouse wheel` | Scroll messages |
-| `Ctrl+R` | Cycle reasoning effort |
+| Mouse click | Select message; toggle tool call expand/collapse |
 
 Bracketed paste is supported — paste multi-line text and newlines are preserved.
 
@@ -121,6 +209,8 @@ src/
 ├── core/                         # Pure business logic (no I/O)
 │   ├── state.rs                  # App state
 │   ├── action.rs                 # Action enum + update() reducer
+│   ├── config.rs                 # Config loading (TOML + env + CLI)
+│   ├── session.rs                # Session persistence
 │   └── tools/                    # Tool system
 │       ├── mod.rs                # Tool trait, registry, type erasure
 │       └── arithmetic.rs         # Add, subtract, multiply, divide
@@ -134,15 +224,19 @@ src/
     ├── mod.rs                    # Event loop, terminal setup
     ├── event.rs                  # Input event mapping
     ├── ui.rs                     # Top-level rendering, hit testing
+    ├── markdown.rs               # Markdown → styled spans (pulldown_cmark + syntect)
     ├── component.rs              # Component + EventHandler traits
     └── components/
-        ├── title_bar.rs          # Status bar (model name, effort level)
+        ├── title_bar.rs          # Status bar with spinner, model, tokens
         ├── message.rs            # Single message widget
         ├── message_list.rs       # Scrollable conversation view
+        ├── tool_message.rs       # Collapsible tool call/result blocks
         ├── landing.rs            # Landing page
         ├── logo.rs               # Animated braille logo
+        ├── session_manager.rs    # Session list overlay
+        ├── model_picker.rs       # Model search/select overlay
         └── input_box/
-            ├── mod.rs            # Text input field
+            ├── mod.rs            # Text input with emacs bindings
             ├── cursor.rs         # Cursor and scroll state
             └── text_wrap.rs      # Text wrapping utilities
 ```
@@ -179,6 +273,18 @@ cargo fmt            # Format
 ```
 
 Rust 2024 edition. Logs are written to `navi.log` in the current directory.
+
+### Recording Demos
+
+Demo tapes use [VHS](https://github.com/charmbracelet/vhs) for terminal recording:
+
+```bash
+vhs demos/start.tape          # Startup & model switching
+vhs demos/conversation.tape   # Markdown conversation
+vhs demos/tools.tape          # Agentic tool use
+vhs demos/editing.tape        # Emacs-style editing
+vhs demos/modes.tape          # Modes & reasoning effort
+```
 
 ## License
 
