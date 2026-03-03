@@ -14,7 +14,7 @@ pub fn draw_ui(frame: &mut Frame, app: &App, tui: &mut TuiState, spinner_frame: 
     // Calculate input height dynamically based on content
     let input_height = tui.input_box.calculate_height(frame.area().width);
 
-    // Dynamic layout (input height grows from 3 to 7 lines)
+    // Dynamic layout: title(1) + messages(flex) + input(3-7)
     let layout = Layout::vertical([Length(1), Min(0), Length(input_height)]);
     let [title_area, main_area, input_area] = layout.areas(frame.area());
 
@@ -46,39 +46,28 @@ pub fn draw_ui(frame: &mut Frame, app: &App, tui: &mut TuiState, spinner_frame: 
         message_list.render(frame, main_area);
     }
 
-    // 2. Compute logic for TitleBar
-    // Since MessageList::render has run, tui.message_list.layout is up-to-date.
-    let has_unseen_content = {
-        let state = &tui.message_list;
-        let total_height: u16 = state.layout.heights.iter().sum();
-        let visible_height = main_area.height;
-
-        if total_height <= visible_height {
-            false
-        } else {
-            let max_possible_scroll = total_height.saturating_sub(visible_height);
-            state.max_scroll_reached < max_possible_scroll
-        }
-    };
-
-    // 3. Render TitleBar
+    // 2. Render TitleBar
+    let session_title = crate::core::session::derive_title(&app.context.items);
     let mut title_bar = TitleBar::new(
-        app.model_name.clone(),
-        app.status_message.clone(),
-        has_unseen_content,
+        &app.model_name,
+        &app.provider_name,
+        app.is_loading,
+        spinner_frame,
+        &session_title,
+        app.session_total_tokens,
     );
     title_bar.render(frame, title_area);
 
-    // 4. Render InputBox
+    // 3. Render InputBox
     // InputBox state is persistent in TuiState
     tui.input_box.render(frame, input_area);
 
-    // 5. Session manager overlay (on top of everything)
+    // 4. Session manager overlay (on top of everything)
     if let Some(ref mut sm) = tui.session_manager {
         SessionManager::new(sm).render(frame, frame.area());
     }
 
-    // 6. Model picker overlay (on top of everything, including session manager)
+    // 5. Model picker overlay (on top of everything, including session manager)
     if let Some(ref mut mp) = tui.model_picker {
         ModelPicker::new(mp, &app.model_name).render(frame, frame.area());
     }

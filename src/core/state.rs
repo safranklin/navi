@@ -18,15 +18,17 @@
 //! ├── stream_done: bool            // SSE stream finished
 //! ├── had_tool_calls: bool         // tool calls received this round
 //! ├── usage_stats: UsageStats     // accumulated inference metrics
-//! └── message_stats: HashMap      // per-message stats keyed by item index
+//! ├── message_stats: HashMap      // per-message stats keyed by item index
+//! ├── provider_name: String       // active provider ("openrouter", "lmstudio")
+//! └── session_total_tokens: u32   // running total across all submissions
 //! ```
 //!
 //! State changes only happen through `update(state, action)` in action.rs.
 //! This keeps things predictable, so no surprise mutations.
 
-use crate::core::config::{
-    self, DEFAULT_MAX_AGENTIC_ROUNDS, DEFAULT_MAX_OUTPUT_TOKENS, ModelEntry, ResolvedConfig,
-};
+use crate::core::config::{ModelEntry, ResolvedConfig};
+#[cfg(test)]
+use crate::core::config::{self, DEFAULT_MAX_AGENTIC_ROUNDS, DEFAULT_MAX_OUTPUT_TOKENS};
 use crate::core::tools::ToolRegistry;
 use crate::inference::{CompletionProvider, Context, Effort, ToolDefinition, UsageStats};
 use std::collections::{HashMap, HashSet};
@@ -54,6 +56,10 @@ pub struct App {
     pub message_stats: HashMap<usize, UsageStats>,
     /// Active session ID (None = unsaved new session).
     pub current_session_id: Option<String>,
+    /// Provider name for the active model (e.g. "openrouter", "lmstudio").
+    pub provider_name: String,
+    /// Running total of tokens across all submissions in this session.
+    pub session_total_tokens: u32,
 
     // --- Config-driven fields ---
     pub max_agentic_rounds: u8,
@@ -66,7 +72,8 @@ pub struct App {
 }
 
 impl App {
-    /// Creates an App with default settings. Used by tests and backward-compat paths.
+    /// Creates an App with default settings. Used by tests via `test_app()`.
+    #[cfg(test)]
     pub fn new(provider: Arc<dyn CompletionProvider>, model_name: String) -> Self {
         Self {
             provider,
@@ -84,6 +91,8 @@ impl App {
             usage_stats: UsageStats::default(),
             message_stats: HashMap::new(),
             current_session_id: None,
+            provider_name: String::new(),
+            session_total_tokens: 0,
             max_agentic_rounds: DEFAULT_MAX_AGENTIC_ROUNDS,
             max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
             system_prompt: config::DEFAULT_SYSTEM_PROMPT.to_string(),
@@ -112,6 +121,8 @@ impl App {
             usage_stats: UsageStats::default(),
             message_stats: HashMap::new(),
             current_session_id: None,
+            provider_name: config.provider.clone(),
+            session_total_tokens: 0,
             max_agentic_rounds: config.max_agentic_rounds,
             max_output_tokens: config.max_output_tokens,
             system_prompt: config.system_prompt.clone(),

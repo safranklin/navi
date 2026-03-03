@@ -37,7 +37,7 @@ use crossterm::event::{
 use crossterm::execute;
 
 use crate::core::action::{Action, Effect, update};
-use crate::core::config::ResolvedConfig;
+use crate::core::config::{ModelEntry, ResolvedConfig};
 use crate::core::session;
 use crate::core::state::App;
 use crate::inference::Effort;
@@ -76,6 +76,8 @@ pub struct TuiState {
     pub session_manager: Option<SessionManagerState>,
     // Model picker overlay (None = hidden)
     pub model_picker: Option<ModelPickerState>,
+    // Pre-fetched models from provider APIs (populated at startup)
+    pub fetched_models: Option<Vec<ModelEntry>>,
 }
 
 impl TuiState {
@@ -87,6 +89,7 @@ impl TuiState {
             pulse_value: 0.0,
             session_manager: None,
             model_picker: None,
+            fetched_models: None,
         }
     }
 }
@@ -161,6 +164,9 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
     // Channel for actions from background tasks
     let (tx, rx) = mpsc::channel();
 
+    // Fetch available models from providers in the background at startup
+    spawn_model_fetch(&app, tx.clone());
+
     // Abort handles for the current generation (used by Escape-to-cancel)
     let mut active_abort_handles: Vec<tokio::task::AbortHandle> = Vec::new();
 
@@ -230,10 +236,13 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
                 continue;
             }
 
-            // Ctrl+P opens model picker and spawns async model fetch
+            // Ctrl+P opens model picker (models pre-fetched at startup)
             if matches!(event, TuiEvent::OpenModelPicker) {
-                tui.model_picker = Some(ModelPickerState::new(app.available_models.clone()));
-                spawn_model_fetch(&app, tx.clone());
+                let mut picker = ModelPickerState::new(app.available_models.clone());
+                if let Some(ref models) = tui.fetched_models {
+                    picker.set_fetched_models(models.clone());
+                }
+                tui.model_picker = Some(picker);
                 continue;
             }
 
@@ -250,6 +259,7 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
                             // Rebuild the provider for the new model
                             app.provider = build_provider(&new_config);
                             app.model_name = entry.name.clone();
+                            app.provider_name = entry.provider.clone();
                             app.status_message =
                                 format!("Switched to {} ({})", entry.name, entry.provider);
                             info!("Model switched: {} ({})", entry.name, entry.provider);
@@ -505,9 +515,10 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
             needs_redraw = true;
 
             // Intercept ModelsFetched — this is TUI-only state, not core business logic.
-            // If picker is closed by the time results arrive, silently drop them.
+            // Cache results for future picker opens; also update picker if currently open.
             if let Action::ModelsFetched(models) = action {
                 debug!("Received {} fetched models", models.len());
+                tui.fetched_models = Some(models.clone());
                 if let Some(ref mut mp) = tui.model_picker {
                     mp.set_fetched_models(models);
                 }

@@ -1,149 +1,124 @@
 //! # TitleBar Component
 //!
-//! Top status bar showing application state and notifications.
-//!
-//! ## Responsibilities
-//!
-//! - Display current model name
-//! - Display status messages (e.g., "Loading...", "Reasoning: Extended")
-//! - Show "↓ New" indicator when there's unseen content below scroll
-//!
-//! ## Design Decisions
-//!
-//! ### Stateless Component
-//!
-//! TitleBar is purely presentational—it receives all data as props and has no
-//! internal state. This makes it trivial to test and reason about:
-//!
-//! ```rust,ignore
-//! let title_bar = TitleBar {
-//!     model_name: "gpt-4".to_string(),
-//!     status_message: "Loading...".to_string(),
-//!     has_unseen_content: true,
-//! };
-//! title_bar.render(frame, area);
-//! ```
-//!
-//! ### Props-in-Struct Pattern
-//!
-//! Rather than passing props as render() parameters, we store them as struct
-//! fields. This is necessary for trait-based polymorphism—the Component trait
-//! requires a fixed render() signature:
-//!
-//! ```rust,ignore
-//! fn render_component<C: Component>(c: &C, frame: &mut Frame, area: Rect) {
-//!     c.render(frame, area);  // Works for any component
-//! }
-//! ```
-//!
-//! ### State Ownership
-//!
-//! All three props come from different sources:
-//! - `model_name`: Core App state (configuration)
-//! - `status_message`: Core App state (computed from effort level, errors, etc.)
-//! - `has_unseen_content`: TUI state (scroll position indicator)
-//!
-//! The TitleBar doesn't care where they come from—it just renders what it's given.
-//! This decoupling makes it reusable.
-//!
-//! ## Conditional Formatting
-//!
-//! The title text changes based on state:
-//!
-//! 1. **Unseen content**: `"Navi Interface (model: gpt-4) | Loading... | ↓ New"`
-//! 2. **Status message**: `"Navi Interface (model: gpt-4) | Loading..."`
-//! 3. **Default**: `"Navi Interface (model: gpt-4)"`
-//!
-//! This priority order ensures the most important information is always visible,
-//! even on narrow terminals.
+//! Single-line status bar: navi branding, loading spinner, model (provider),
+//! session title, and session token count.
 
 use crate::tui::component::Component;
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::text::Span;
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::Paragraph;
 
-/// Top status bar component showing model name, status, and notifications.
-///
-/// # Props
-///
-/// All fields are "props" (configuration from parent):
-/// - `model_name`: The current LLM model (e.g., "gpt-4", "claude-sonnet-3.5")
-/// - `status_message`: Transient status (e.g., "Loading...", "Reasoning: Extended")
-/// - `has_unseen_content`: Whether there's content below current scroll position
-///
-/// # Example
-///
-/// ```rust,ignore
-/// let mut title_bar = TitleBar {
-///     model_name: app.model_name.clone(),
-///     status_message: app.status_message.clone(),
-///     has_unseen_content: tui.has_unseen_content,
-/// };
-///
-/// // Later, update props when state changes
-/// title_bar.model_name = new_model.clone();
-/// title_bar.render(frame, title_area);
-/// ```
-#[allow(dead_code)] // Used in Phase 4 (integration with main loop)
-pub struct TitleBar {
-    /// Current model name (e.g., "gpt-4")
-    pub model_name: String,
-    /// Status message (e.g., "Loading...", "Reasoning: Extended")
-    pub status_message: String,
-    /// Whether there's content below the current scroll position
-    pub has_unseen_content: bool,
+/// Braille circle-worm spinner frames (standard CLI pattern).
+const SPINNER_FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+pub struct TitleBar<'a> {
+    model_name: &'a str,
+    provider_name: &'a str,
+    is_loading: bool,
+    spinner_frame: usize,
+    session_title: &'a str,
+    session_total_tokens: u32,
 }
 
-impl TitleBar {
-    /// Create a new TitleBar with the given props.
-    ///
-    /// # Design: Why provide a constructor?
-    ///
-    /// While fields are public and you *could* construct with struct literal syntax,
-    /// providing `new()` gives us a stable API. If we later add internal state or
-    /// validation, existing code won't break.
-    #[allow(dead_code)] // Used in Phase 4 (integration with main loop)
-    pub fn new(model_name: String, status_message: String, has_unseen_content: bool) -> Self {
+impl<'a> TitleBar<'a> {
+    pub fn new(
+        model_name: &'a str,
+        provider_name: &'a str,
+        is_loading: bool,
+        spinner_frame: usize,
+        session_title: &'a str,
+        session_total_tokens: u32,
+    ) -> Self {
         Self {
             model_name,
-            status_message,
-            has_unseen_content,
+            provider_name,
+            is_loading,
+            spinner_frame,
+            session_title,
+            session_total_tokens,
         }
     }
 }
 
-impl Component for TitleBar {
-    /// Render the title bar as a single line with conditional formatting.
-    ///
-    /// # Layout
-    ///
-    /// The title bar is always a single line (height 1). It shows:
-    /// - Model name (always visible)
-    /// - Status message (if present)
-    /// - "↓ New" indicator (if has_unseen_content)
-    ///
-    /// # Design: Why not use a Block widget?
-    ///
-    /// We use a plain Span rather than a Block because:
-    /// 1. Title bar is always 1 line—no need for borders or padding
-    /// 2. Span is lighter weight (no border rendering overhead)
-    /// 3. Simpler to test (just check the text content)
-    fn render(&mut self, frame: &mut Frame, area: Rect) {
-        let title_text = if self.has_unseen_content {
-            format!(
-                "Navi Interface (model: {}) | {} | ↓ New",
-                self.model_name, self.status_message
-            )
-        } else if self.status_message.is_empty() {
-            format!("Navi Interface (model: {})", self.model_name)
-        } else {
-            format!(
-                "Navi Interface (model: {}) | {}",
-                self.model_name, self.status_message
-            )
-        };
+/// Format a token count compactly: "1.2k" for >= 1000, raw number otherwise.
+fn format_tokens(n: u32) -> String {
+    if n >= 1_000_000 {
+        format!("{:.1}M", n as f64 / 1_000_000.0)
+    } else if n >= 1_000 {
+        format!("{:.1}k", n as f64 / 1_000.0)
+    } else {
+        n.to_string()
+    }
+}
 
-        frame.render_widget(Span::raw(title_text), area);
+impl Component for TitleBar<'_> {
+    fn render(&mut self, frame: &mut Frame, area: Rect) {
+        let sep = Span::styled(" │ ", Style::default().fg(Color::DarkGray));
+
+        // -- Left side: navi + spinner + model (provider) --
+        let mut left: Vec<Span> = Vec::new();
+
+        left.push(Span::styled(
+            "navi",
+            Style::default()
+                .fg(Color::Blue)
+                .add_modifier(Modifier::BOLD),
+        ));
+
+        if self.is_loading {
+            let ch = SPINNER_FRAMES[self.spinner_frame % SPINNER_FRAMES.len()];
+            left.push(Span::styled(
+                format!(" {ch}"),
+                Style::default().fg(Color::Blue),
+            ));
+        }
+
+        left.push(sep.clone());
+
+        left.push(Span::styled(
+            self.model_name,
+            Style::default().fg(Color::White),
+        ));
+
+        if !self.provider_name.is_empty() {
+            left.push(Span::styled(
+                format!(" ({})", self.provider_name),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+
+        // -- Right side: session title + session tokens --
+        let mut right: Vec<Span> = Vec::new();
+
+        if !self.session_title.is_empty() && self.session_title != "Untitled" {
+            right.push(Span::styled(
+                self.session_title,
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+
+        if self.session_total_tokens > 0 {
+            if !right.is_empty() {
+                right.push(sep);
+            }
+            right.push(Span::styled(
+                format!("{} tokens", format_tokens(self.session_total_tokens)),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+
+        // -- Compose: left + padding + right --
+        let left_width: usize = left.iter().map(|s| s.width()).sum();
+        let right_width: usize = right.iter().map(|s| s.width()).sum();
+        let gap = (area.width as usize).saturating_sub(left_width + right_width);
+
+        let mut spans = left;
+        spans.push(Span::raw(" ".repeat(gap)));
+        spans.extend(right);
+
+        frame.render_widget(Paragraph::new(Line::from(spans)), area);
     }
 }
 
@@ -153,109 +128,112 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
-    #[test]
-    fn test_title_bar_new() {
-        let title_bar = TitleBar::new("gpt-4".to_string(), "Loading...".to_string(), false);
-
-        assert_eq!(title_bar.model_name, "gpt-4");
-        assert_eq!(title_bar.status_message, "Loading...");
-        assert!(!title_bar.has_unseen_content);
-    }
-
-    #[test]
-    fn test_title_bar_with_unseen_content() {
-        let backend = TestBackend::new(80, 1);
+    fn render(width: u16, bar: &mut TitleBar) -> String {
+        let backend = TestBackend::new(width, 1);
         let mut terminal = Terminal::new(backend).unwrap();
-
-        let mut title_bar =
-            TitleBar::new("gpt-4".to_string(), "Reasoning: Extended".to_string(), true);
-
         terminal
-            .draw(|f| {
-                title_bar.render(f, f.area());
-            })
+            .draw(|f| bar.render(f, f.area()))
             .unwrap();
-
-        let buffer = terminal.backend().buffer();
-        let text = buffer
+        terminal
+            .backend()
+            .buffer()
             .content()
             .iter()
             .map(|c| c.symbol())
-            .collect::<String>();
+            .collect::<String>()
+    }
 
-        assert!(text.contains("Navi Interface"));
+    fn bar<'a>(
+        model: &'a str,
+        provider: &'a str,
+        loading: bool,
+        title: &'a str,
+        tokens: u32,
+    ) -> TitleBar<'a> {
+        TitleBar::new(model, provider, loading, 0, title, tokens)
+    }
+
+    #[test]
+    fn test_basic_rendering() {
+        let mut b = bar("gpt-4", "openrouter", false, "", 0);
+        let text = render(80, &mut b);
+        assert!(text.contains("navi"));
         assert!(text.contains("gpt-4"));
-        assert!(text.contains("Reasoning: Extended"));
-        assert!(text.contains("↓ New"));
+        assert!(text.contains("(openrouter)"));
     }
 
     #[test]
-    fn test_title_bar_with_status_message() {
-        let backend = TestBackend::new(80, 1);
-        let mut terminal = Terminal::new(backend).unwrap();
-
-        let mut title_bar = TitleBar::new(
-            "claude-sonnet-3.5".to_string(),
-            "Thinking...".to_string(),
-            false,
-        );
-
-        terminal
-            .draw(|f| {
-                title_bar.render(f, f.area());
-            })
-            .unwrap();
-
-        let buffer = terminal.backend().buffer();
-        let text = buffer
-            .content()
-            .iter()
-            .map(|c| c.symbol())
-            .collect::<String>();
-
-        assert!(text.contains("Navi Interface"));
-        assert!(text.contains("claude-sonnet-3.5"));
-        assert!(text.contains("Thinking..."));
-        assert!(!text.contains("↓ New"));
+    fn test_spinner_shown_when_loading() {
+        let mut b = bar("gpt-4", "", true, "", 0);
+        let text = render(80, &mut b);
+        assert!(SPINNER_FRAMES.iter().any(|&ch| text.contains(ch)));
     }
 
     #[test]
-    fn test_title_bar_default_no_status() {
-        let backend = TestBackend::new(80, 1);
-        let mut terminal = Terminal::new(backend).unwrap();
-
-        let mut title_bar = TitleBar::new("gpt-4".to_string(), "".to_string(), false);
-
-        terminal
-            .draw(|f| {
-                title_bar.render(f, f.area());
-            })
-            .unwrap();
-
-        let buffer = terminal.backend().buffer();
-        let text = buffer
-            .content()
-            .iter()
-            .map(|c| c.symbol())
-            .collect::<String>();
-
-        assert!(text.contains("Navi Interface"));
-        assert!(text.contains("gpt-4"));
-        assert!(!text.contains('|'));
-        assert!(!text.contains("↓ New"));
+    fn test_spinner_hidden_when_not_loading() {
+        let mut b = bar("gpt-4", "", false, "", 0);
+        let text = render(80, &mut b);
+        assert!(!SPINNER_FRAMES.iter().any(|&ch| text.contains(ch)));
     }
 
     #[test]
-    fn test_title_bar_props_are_mutable() {
-        let mut title_bar = TitleBar::new("gpt-4".to_string(), "".to_string(), false);
+    fn test_provider_shown() {
+        let mut b = bar("claude-sonnet", "openrouter", false, "", 0);
+        let text = render(80, &mut b);
+        assert!(text.contains("(openrouter)"));
+    }
 
-        // Simulate updating props when app state changes
-        title_bar.model_name = "claude-opus".to_string();
-        title_bar.status_message = "Reasoning: Extended".to_string();
-        title_bar.has_unseen_content = true;
+    #[test]
+    fn test_empty_provider_hidden() {
+        let mut b = bar("gpt-4", "", false, "", 0);
+        let text = render(80, &mut b);
+        assert!(!text.contains("()"));
+    }
 
-        assert_eq!(title_bar.model_name, "claude-opus");
-        assert_eq!(title_bar.status_message, "Reasoning: Extended");
-        assert!(title_bar.has_unseen_content);
+    #[test]
+    fn test_session_title_shown() {
+        let mut b = bar("gpt-4", "", false, "My Chat", 0);
+        let text = render(80, &mut b);
+        assert!(text.contains("My Chat"));
+    }
+
+    #[test]
+    fn test_untitled_session_hidden() {
+        let mut b = bar("gpt-4", "", false, "Untitled", 0);
+        let text = render(80, &mut b);
+        assert!(!text.contains("Untitled"));
+    }
+
+    #[test]
+    fn test_session_tokens_shown() {
+        let mut b = bar("gpt-4", "", false, "", 2500);
+        let text = render(80, &mut b);
+        assert!(text.contains("2.5k tokens"));
+    }
+
+    #[test]
+    fn test_zero_tokens_hidden() {
+        let mut b = bar("gpt-4", "", false, "", 0);
+        let text = render(80, &mut b);
+        assert!(!text.contains("tokens"));
+    }
+
+    #[test]
+    fn test_format_tokens_small() {
+        assert_eq!(format_tokens(42), "42");
+        assert_eq!(format_tokens(999), "999");
+    }
+
+    #[test]
+    fn test_format_tokens_thousands() {
+        assert_eq!(format_tokens(1000), "1.0k");
+        assert_eq!(format_tokens(1500), "1.5k");
+        assert_eq!(format_tokens(23456), "23.5k");
+    }
+
+    #[test]
+    fn test_format_tokens_millions() {
+        assert_eq!(format_tokens(1_000_000), "1.0M");
+        assert_eq!(format_tokens(2_500_000), "2.5M");
     }
 }

@@ -158,6 +158,10 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
             app_state.stream_done = true;
             if let Some(round_stats) = stats {
                 app_state.usage_stats.accumulate(&round_stats);
+                // Accumulate into session-level running total
+                if let Some(tokens) = round_stats.total_tokens {
+                    app_state.session_total_tokens += tokens;
+                }
                 // Store per-message stats on the last Model message
                 if let Some(idx) = app_state
                     .context
@@ -226,6 +230,7 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
             app_state.agentic_rounds = 0;
             app_state.usage_stats = UsageStats::default();
             app_state.message_stats.clear();
+            app_state.session_total_tokens = 0;
             app_state.error = None;
             app_state.status_message = format!("Loaded: {}", data.meta.title);
             Effect::Render
@@ -240,6 +245,7 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
             app_state.agentic_rounds = 0;
             app_state.usage_stats = UsageStats::default();
             app_state.message_stats.clear();
+            app_state.session_total_tokens = 0;
             app_state.error = None;
             app_state.status_message = String::from("New session.");
             Effect::Render
