@@ -151,6 +151,10 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
     let mut app = App::from_config(provider, &config);
     let mut tui = TuiState::new(app.effort);
 
+    // Open session manager on startup so user picks a session (or starts new)
+    let index = session::load_index().unwrap_or_default();
+    tui.session_manager = Some(SessionManagerState::new(index.sessions));
+
     let mut terminal = ratatui::init();
     let _terminal_mode_guard = TerminalModeGuard::new();
 

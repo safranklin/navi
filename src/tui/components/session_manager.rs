@@ -198,13 +198,13 @@ impl<'a> SessionManager<'a> {
     }
 }
 
-/// Format a Unix timestamp as "Jan 15" style date.
+/// Format a Unix timestamp as "Jan 15 14:30" style date+time.
 fn format_timestamp(ts: i64) -> String {
     use chrono::{DateTime, Local, Utc};
     let dt: DateTime<Local> = DateTime::<Utc>::from_timestamp(ts, 0)
         .unwrap_or_default()
         .with_timezone(&Local);
-    dt.format("%b %d").to_string()
+    dt.format("%b %d %H:%M").to_string()
 }
 
 /// Truncate a string to fit within `max_width` chars, adding "..." if needed.
