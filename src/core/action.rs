@@ -222,6 +222,7 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
             }
             app_state.context = context;
             app_state.current_session_id = Some(data.meta.id);
+            app_state.session_title = data.meta.title.clone();
             app_state.model_name = data.meta.model_name;
             app_state.is_loading = false;
             app_state.pending_tool_calls.clear();
@@ -238,6 +239,7 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
         Action::NewSession => {
             app_state.context = Context::with_system_prompt(app_state.system_prompt.clone());
             app_state.current_session_id = None;
+            app_state.session_title = String::new();
             app_state.is_loading = false;
             app_state.pending_tool_calls.clear();
             app_state.stream_done = false;

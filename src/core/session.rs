@@ -57,21 +57,44 @@ pub fn new_session_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
-/// Derive a title from the first user message in the conversation.
-/// Returns the first line, truncated to 60 chars.
-pub fn derive_title(items: &[ContextItem]) -> String {
-    for item in items {
-        if let ContextItem::Message(seg) = item
-            && seg.source == Source::User
-        {
-            let first_line = seg.content.lines().next().unwrap_or("").trim();
-            if first_line.len() > 60 {
-                return format!("{}...", &first_line[..57]);
-            }
-            return first_line.to_string();
-        }
+/// Compute the next session number by scanning existing titles for "Session #N".
+/// Returns max(N) + 1, so numbering is gap-free even after deletions.
+pub fn next_session_number() -> u32 {
+    let index = load_index().unwrap_or_default();
+    let max_num = index
+        .sessions
+        .iter()
+        .filter_map(|m| {
+            m.title
+                .strip_prefix("Session #")
+                .and_then(|n| n.parse::<u32>().ok())
+        })
+        .max()
+        .unwrap_or(0);
+    max_num + 1
+}
+
+/// Rename a session's title on disk (both session file and index).
+pub fn rename_session(id: &str, new_title: &str) -> io::Result<()> {
+    let dir = sessions_dir()?;
+    let path = dir.join(format!("{}.json", id));
+
+    // Update session file
+    let json = fs::read_to_string(&path)?;
+    let mut data: SessionData =
+        serde_json::from_str(&json).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    data.meta.title = new_title.to_string();
+    atomic_write_json(&path, &data)?;
+
+    // Update index
+    let mut index = load_index().unwrap_or_default();
+    if let Some(entry) = index.sessions.iter_mut().find(|s| s.id == id) {
+        entry.title = new_title.to_string();
     }
-    "Untitled".to_string()
+    let index_path = dir.join("sessions.json");
+    atomic_write_json(&index_path, &index)?;
+
+    Ok(())
 }
 
 /// Count user + model messages (not directives, status, tool calls, etc.).
@@ -130,10 +153,14 @@ fn atomic_write_json<T: Serialize>(path: &Path, data: &T) -> io::Result<()> {
 }
 
 /// Save a session to disk and update the index.
+///
+/// `title` is the explicit session title (e.g. "Session #3" or user-renamed).
+/// `existing_meta` preserves created_at from prior saves.
 pub fn save_session(
     id: &str,
     items: &[ContextItem],
     model_name: &str,
+    title: &str,
     existing_meta: Option<&SessionMeta>,
 ) -> io::Result<()> {
     let dir = sessions_dir()?;
@@ -149,9 +176,7 @@ pub fn save_session(
 
     let meta = SessionMeta {
         id: id.to_string(),
-        title: existing_meta
-            .map(|m| m.title.clone())
-            .unwrap_or_else(|| derive_title(items)),
+        title: title.to_string(),
         created_at: existing_meta.map(|m| m.created_at).unwrap_or(now),
         updated_at: now,
         message_count,
@@ -232,18 +257,24 @@ pub fn save_current_session(app: &mut App) {
         return;
     }
 
+    // Generate title if not yet assigned (e.g. dismissed session manager on startup)
+    if app.session_title.is_empty() {
+        app.session_title = format!("Session #{}", next_session_number());
+    }
+
     let id = app
         .current_session_id
         .get_or_insert_with(new_session_id)
         .clone();
 
-    // Load existing meta to preserve title/created_at
+    // Load existing meta to preserve created_at
     let existing_meta = load_session(&id).ok().map(|d| d.meta);
 
     if let Err(e) = save_session(
         &id,
         &app.context.items,
         &app.model_name,
+        &app.session_title,
         existing_meta.as_ref(),
     ) {
         warn!("Failed to save session: {}", e);
@@ -276,37 +307,6 @@ mod tests {
             source: Source::Directive,
             content: "system prompt".to_string(),
         })
-    }
-
-    #[test]
-    fn test_derive_title_from_first_user_message() {
-        let items = vec![
-            directive_msg(),
-            user_msg("What is Rust?"),
-            model_msg("Rust is..."),
-        ];
-        assert_eq!(derive_title(&items), "What is Rust?");
-    }
-
-    #[test]
-    fn test_derive_title_truncates_long_messages() {
-        let long = "a".repeat(80);
-        let items = vec![user_msg(&long)];
-        let title = derive_title(&items);
-        assert!(title.len() <= 63); // 57 + "..."
-        assert!(title.ends_with("..."));
-    }
-
-    #[test]
-    fn test_derive_title_uses_first_line() {
-        let items = vec![user_msg("First line\nSecond line\nThird line")];
-        assert_eq!(derive_title(&items), "First line");
-    }
-
-    #[test]
-    fn test_derive_title_no_user_messages() {
-        let items = vec![directive_msg()];
-        assert_eq!(derive_title(&items), "Untitled");
     }
 
     #[test]

@@ -298,8 +298,20 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
                             if effect == Effect::Quit {
                                 should_quit = true;
                             }
+                            // Assign "Session #N" title immediately
+                            app.session_title =
+                                format!("Session #{}", session::next_session_number());
                             tui.message_list = MessageListState::new();
                             tui.session_manager = None;
+                        }
+                        SessionEvent::Rename { id, new_title } => {
+                            if let Err(e) = session::rename_session(&id, &new_title) {
+                                warn!("Failed to rename session {}: {}", id, e);
+                            }
+                            // Update active session title if renaming the current one
+                            if app.current_session_id.as_deref() == Some(&id) {
+                                app.session_title = new_title;
+                            }
                         }
                         SessionEvent::Delete(id) => {
                             if let Err(e) = session::delete_session(&id) {

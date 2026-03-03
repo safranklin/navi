@@ -47,13 +47,12 @@ pub fn draw_ui(frame: &mut Frame, app: &App, tui: &mut TuiState, spinner_frame: 
     }
 
     // 2. Render TitleBar
-    let session_title = crate::core::session::derive_title(&app.context.items);
     let mut title_bar = TitleBar::new(
         &app.model_name,
         &app.provider_name,
         app.is_loading,
         spinner_frame,
-        &session_title,
+        &app.session_title,
         app.session_total_tokens,
     );
     title_bar.render(frame, title_area);

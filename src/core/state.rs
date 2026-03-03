@@ -20,7 +20,8 @@
 //! ├── usage_stats: UsageStats     // accumulated inference metrics
 //! ├── message_stats: HashMap      // per-message stats keyed by item index
 //! ├── provider_name: String       // active provider ("openrouter", "lmstudio")
-//! └── session_total_tokens: u32   // running total across all submissions
+//! ├── session_total_tokens: u32   // running total across all submissions
+//! └── session_title: String       // display title ("Session #3" or custom)
 //! ```
 //!
 //! State changes only happen through `update(state, action)` in action.rs.
@@ -60,6 +61,8 @@ pub struct App {
     pub provider_name: String,
     /// Running total of tokens across all submissions in this session.
     pub session_total_tokens: u32,
+    /// Display title for the current session (e.g. "Session #3" or user-renamed).
+    pub session_title: String,
 
     // --- Config-driven fields ---
     pub max_agentic_rounds: u8,
@@ -93,6 +96,7 @@ impl App {
             current_session_id: None,
             provider_name: String::new(),
             session_total_tokens: 0,
+            session_title: String::new(),
             max_agentic_rounds: DEFAULT_MAX_AGENTIC_ROUNDS,
             max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
             system_prompt: config::DEFAULT_SYSTEM_PROMPT.to_string(),
@@ -123,6 +127,7 @@ impl App {
             current_session_id: None,
             provider_name: config.provider.clone(),
             session_total_tokens: 0,
+            session_title: String::new(),
             max_agentic_rounds: config.max_agentic_rounds,
             max_output_tokens: config.max_output_tokens,
             system_prompt: config.system_prompt.clone(),

@@ -92,7 +92,7 @@ impl Component for TitleBar<'_> {
         // -- Right side: session title + session tokens --
         let mut right: Vec<Span> = Vec::new();
 
-        if !self.session_title.is_empty() && self.session_title != "Untitled" {
+        if !self.session_title.is_empty() {
             right.push(Span::styled(
                 self.session_title,
                 Style::default().fg(Color::DarkGray),
@@ -198,10 +198,11 @@ mod tests {
     }
 
     #[test]
-    fn test_untitled_session_hidden() {
-        let mut b = bar("gpt-4", "", false, "Untitled", 0);
+    fn test_empty_session_title_hidden() {
+        let mut b = bar("gpt-4", "", false, "", 0);
         let text = render(80, &mut b);
-        assert!(!text.contains("Untitled"));
+        // Empty title should not add extra spacing or artifacts
+        assert!(text.contains("navi"));
     }
 
     #[test]
