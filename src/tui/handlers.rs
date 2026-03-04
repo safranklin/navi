@@ -391,15 +391,19 @@ pub fn handle_session_event(event: SessionEvent, app: &mut App, tui: &mut TuiSta
             }
         }
         SessionEvent::Delete(id) => {
+            let is_active = app.current_session_id.as_deref() == Some(&id);
             if let Err(e) = session::delete_session(&id) {
                 warn!("Failed to delete session {}: {}", id, e);
             }
             if let Some(ref mut sm) = tui.session_manager {
                 sm.remove_session(&id);
             }
-            // If we deleted the active session, clear the ID
-            if app.current_session_id.as_deref() == Some(&id) {
-                app.current_session_id = None;
+            // If we deleted the active session, reset to a blank slate so
+            // the exit path doesn't re-save the deleted conversation.
+            if is_active {
+                update(app, Action::NewSession);
+                tui.message_list = MessageListState::new();
+                tui.title_generation_pending = false;
             }
         }
         SessionEvent::Dismiss => {
