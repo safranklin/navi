@@ -251,18 +251,6 @@ pub fn spawn_model_fetch(app: &App, tx: mpsc::Sender<Action>) {
     });
 }
 
-/// Returns true if the session title is empty or still the default "Session #N".
-pub fn needs_title_generation(app: &App) -> bool {
-    let title = app.session_title.trim();
-    if title.is_empty() {
-        return true;
-    }
-    // Match "Session #<digits>"
-    title
-        .strip_prefix("Session #")
-        .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()))
-}
-
 /// Spawns a background task to generate a session title after the first model response.
 pub fn spawn_title_generation(app: &App, tx: mpsc::Sender<Action>) {
     let Some(input) = title::first_exchange(&app.context.items) else {

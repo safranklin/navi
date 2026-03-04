@@ -41,9 +41,7 @@ use crate::core::action::{Action, Effect, update};
 use crate::core::config::{ModelEntry, ResolvedConfig};
 use crate::core::session;
 use crate::core::state::App;
-use crate::inference::{
-    CompletionProvider, ContextItem, Effort, LmStudioProvider, OpenRouterProvider,
-};
+use crate::inference::{ContextItem, Effort};
 use crate::tui::component::EventHandler;
 use crate::tui::components::model_picker::ModelPickerEvent;
 use crate::tui::components::session_manager::SessionEvent;
@@ -132,28 +130,8 @@ impl Drop for TerminalModeGuard {
     }
 }
 
-/// Build a provider from a resolved config's provider name and credentials.
-pub fn build_provider(config: &ResolvedConfig) -> Arc<dyn CompletionProvider> {
-    match config.provider.as_str() {
-        "lmstudio" => Arc::new(LmStudioProvider::new(config.lmstudio_base_url.clone())),
-        _ => {
-            // Default to openrouter
-            let api_key = config
-                .openrouter_api_key
-                .clone()
-                .expect("OpenRouter API key must be set (config file, OPENROUTER_API_KEY env var, or --provider lmstudio)");
-            Arc::new(OpenRouterProvider::new(
-                api_key,
-                Some(config.openrouter_base_url.clone()),
-            ))
-        }
-    }
-}
-
-use std::sync::Arc;
-
 pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
-    let provider = build_provider(&config);
+    let provider = crate::inference::build_provider(&config);
     let mut app = App::from_config(provider, &config);
     let mut tui = TuiState::new(app.effort);
 
@@ -260,7 +238,7 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
                             new_config.model_name = entry.name.clone();
 
                             // Rebuild the provider for the new model
-                            app.provider = build_provider(&new_config);
+                            app.provider = crate::inference::build_provider(&new_config);
                             app.model_name = entry.name.clone();
                             app.provider_name = entry.provider.clone();
                             app.status_message =
@@ -564,7 +542,7 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
                 Effect::SaveSession => {
                     session::save_current_session(&mut app);
                     if !tui.title_generation_pending
-                        && tasks::needs_title_generation(&app)
+                        && session::needs_title_generation(&app)
                     {
                         tui.title_generation_pending = true;
                         tasks::spawn_title_generation(&app, tx.clone());
