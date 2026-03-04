@@ -119,6 +119,8 @@ impl TerminalModeGuard {
 
 impl Drop for TerminalModeGuard {
     fn drop(&mut self) {
+        // Disable custom modes FIRST while raw mode is still active — if raw mode
+        // is off, buffered mouse/keyboard escape sequences leak as visible garbage.
         let _ = execute!(
             stdout(),
             PopKeyboardEnhancementFlags,
@@ -126,6 +128,14 @@ impl Drop for TerminalModeGuard {
             DisableBracketedPaste,
             Hide // Hide cursor on exit
         );
+        // Drain any mouse/keyboard events buffered before the terminal processed
+        // our DisableMouseCapture. Without this, leftover escape sequences in the
+        // input stream leak as visible garbage when raw mode is turned off.
+        while crossterm::event::poll(std::time::Duration::ZERO).unwrap_or(false) {
+            let _ = crossterm::event::read();
+        }
+        // THEN restore ratatui (leaves raw mode, exits alternate screen).
+        ratatui::restore();
     }
 }
 
@@ -481,6 +491,6 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
     tasks::regenerate_title_with_exit_animation(&mut app, &mut terminal);
     session::save_current_session(&mut app);
 
-    ratatui::restore();
     Ok(())
+    // terminal_mode_guard drops here — disables mouse/keyboard modes, then restores terminal
 }
