@@ -627,6 +627,7 @@ fn spawn_request(app: &App, tx: mpsc::Sender<Action>) -> Vec<tokio::task::AbortH
             effort,
             tools: &tools,
             max_output_tokens,
+            response_format: None,
         };
 
         if let Err(e) = provider.stream_completion(request, chunk_tx).await {

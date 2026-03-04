@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::Sender;
 
 use crate::inference::{
-    CompletionProvider, CompletionRequest, ContextItem, Effort, ProviderError, Source, StreamChunk,
-    ToolDefinition, UsageStats,
+    CompletionProvider, CompletionRequest, ContextItem, Effort, ProviderError, ResponseFormat,
+    Source, StreamChunk, ToolDefinition, UsageStats,
 };
 
 // ============================================================================
@@ -71,6 +71,21 @@ struct ApiToolDefinition {
     parameters: serde_json::Value,
 }
 
+/// Maps `ResponseFormat` to the API's `response_format` object.
+#[derive(Serialize, Debug)]
+struct ApiResponseFormat {
+    r#type: &'static str,
+}
+
+fn response_format_to_api(fmt: Option<ResponseFormat>) -> Option<ApiResponseFormat> {
+    match fmt {
+        Some(ResponseFormat::Json) => Some(ApiResponseFormat {
+            r#type: "json_object",
+        }),
+        Some(ResponseFormat::Text) | None => None,
+    }
+}
+
 /// The request body for the Responses API
 #[derive(Serialize, Debug)]
 struct ResponsesRequest {
@@ -83,6 +98,8 @@ struct ResponsesRequest {
     tools: Option<Vec<ApiToolDefinition>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_output_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_format: Option<ApiResponseFormat>,
 }
 
 /// Generic SSE event wrapper to extract the type field
@@ -367,6 +384,7 @@ impl CompletionProvider for OpenRouterProvider {
             reasoning,
             tools: tools_to_api(request.tools),
             max_output_tokens: request.max_output_tokens,
+            response_format: response_format_to_api(request.response_format),
         };
 
         info!(
@@ -700,6 +718,7 @@ mod tests {
             reasoning: effort_to_reasoning(Effort::Auto),
             tools: None,
             max_output_tokens: None,
+            response_format: None,
         };
 
         let json = serde_json::to_string(&request).unwrap();
@@ -718,6 +737,7 @@ mod tests {
             reasoning: effort_to_reasoning(Effort::High),
             tools: None,
             max_output_tokens: None,
+            response_format: None,
         };
 
         let json = serde_json::to_string(&request).unwrap();
@@ -734,6 +754,7 @@ mod tests {
             reasoning: effort_to_reasoning(Effort::None),
             tools: None,
             max_output_tokens: None,
+            response_format: None,
         };
 
         let json = serde_json::to_string(&request).unwrap();

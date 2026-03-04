@@ -83,6 +83,7 @@ data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_or_001\"}}
         effort: Effort::None,
         tools: &[],
         max_output_tokens: None,
+        response_format: None,
     };
 
     let (tx, rx) = mpsc::channel(100);
@@ -129,6 +130,7 @@ data: {\"type\":\"response.completed\"}
         effort: Effort::High,
         tools: &[],
         max_output_tokens: None,
+        response_format: None,
     };
 
     let (tx, rx) = mpsc::channel(100);
@@ -160,6 +162,7 @@ async fn test_openrouter_api_error_response() {
         effort: Effort::None,
         tools: &[],
         max_output_tokens: None,
+        response_format: None,
     };
 
     let (tx, _rx) = mpsc::channel(100);
@@ -198,6 +201,7 @@ data: {\"type\":\"response.output_text.delta\",\"delta\":\" world\"}
         effort: Effort::None,
         tools: &[],
         max_output_tokens: None,
+        response_format: None,
     };
 
     let (tx, rx) = mpsc::channel(1);
@@ -247,6 +251,7 @@ data: {\"response\":{\"id\":\"resp_lms_001\"}}
         effort: Effort::None,
         tools: &[],
         max_output_tokens: None,
+        response_format: None,
     };
 
     let (tx, rx) = mpsc::channel(100);
@@ -290,6 +295,7 @@ data: {\"id\":\"test\"}
         effort: Effort::Medium,
         tools: &[],
         max_output_tokens: None,
+        response_format: None,
     };
 
     let (tx, rx) = mpsc::channel(100);
@@ -339,6 +345,7 @@ data: {\"id\":\"test\"}
         effort: Effort::None,
         tools: &[],
         max_output_tokens: None,
+        response_format: None,
     };
 
     let (tx, rx) = mpsc::channel(100);
@@ -386,6 +393,7 @@ async fn test_effort_levels_affect_request() {
             effort,
             tools: &[],
             max_output_tokens: None,
+            response_format: None,
         };
 
         let (tx, _rx) = mpsc::channel(100);

@@ -3,7 +3,7 @@ use std::fmt;
 use async_trait::async_trait;
 use tokio::sync::mpsc::Sender;
 
-use super::types::{Context, Effort, StreamChunk, ToolDefinition};
+use super::types::{Context, Effort, ResponseFormat, StreamChunk, ToolDefinition};
 
 /// Errors that can occur during provider operations.
 /// Variants carry enough info to determine retryability (future use).
@@ -38,6 +38,7 @@ pub struct CompletionRequest<'a> {
     pub effort: Effort,
     pub tools: &'a [ToolDefinition], // empty slice = no tools
     pub max_output_tokens: Option<u32>,
+    pub response_format: Option<ResponseFormat>,
 }
 
 #[async_trait]

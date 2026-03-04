@@ -267,6 +267,15 @@ impl Effort {
     }
 }
 
+/// Response format hint for the provider.
+/// `Json` activates constrained JSON generation (provider sends `{"type":"json_object"}`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // Infrastructure — consumed by task::Prompt, real callers land soon.
+pub enum ResponseFormat {
+    Text,
+    Json,
+}
+
 /// A tool the model can call.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDefinition {
