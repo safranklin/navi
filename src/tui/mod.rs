@@ -42,6 +42,7 @@ use crate::core::session;
 use crate::core::state::App;
 use crate::inference::Effort;
 use crate::inference::model_discovery;
+use crate::inference::tasks::title;
 use crate::inference::{
     CompletionProvider, CompletionRequest, ContextItem, LmStudioProvider, OpenRouterProvider,
     StreamChunk,
@@ -78,6 +79,8 @@ pub struct TuiState {
     pub model_picker: Option<ModelPickerState>,
     // Pre-fetched models from provider APIs (populated at startup)
     pub fetched_models: Option<Vec<ModelEntry>>,
+    // One-shot guard: true once title generation has been spawned for this session
+    pub title_generation_pending: bool,
 }
 
 impl TuiState {
@@ -90,6 +93,7 @@ impl TuiState {
             session_manager: None,
             model_picker: None,
             fetched_models: None,
+            title_generation_pending: false,
         }
     }
 }
@@ -278,6 +282,10 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
                 if let Some(session_event) = sm.handle_event(&event) {
                     match session_event {
                         SessionEvent::Load(id) => {
+                            // Save outgoing session and regenerate its title in the background
+                            session::save_current_session(&mut app);
+                            spawn_title_regeneration_for_outgoing(&app);
+
                             match session::load_session(&id) {
                                 Ok(data) => {
                                     let effect = update(&mut app, Action::LoadSession(data));
@@ -285,6 +293,7 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
                                         should_quit = true;
                                     }
                                     tui.message_list = MessageListState::new();
+                                    tui.title_generation_pending = false;
                                 }
                                 Err(e) => {
                                     warn!("Failed to load session {}: {}", id, e);
@@ -294,6 +303,10 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
                             tui.session_manager = None;
                         }
                         SessionEvent::CreateNew => {
+                            // Save outgoing session and regenerate its title in the background
+                            session::save_current_session(&mut app);
+                            spawn_title_regeneration_for_outgoing(&app);
+
                             let effect = update(&mut app, Action::NewSession);
                             if effect == Effect::Quit {
                                 should_quit = true;
@@ -302,6 +315,7 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
                             app.session_title =
                                 format!("Session #{}", session::next_session_number());
                             tui.message_list = MessageListState::new();
+                            tui.title_generation_pending = false;
                             tui.session_manager = None;
                         }
                         SessionEvent::Rename { id, new_title } => {
@@ -549,13 +563,18 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
                 }
                 Effect::SaveSession => {
                     session::save_current_session(&mut app);
+                    if !tui.title_generation_pending && needs_title_generation(&app) {
+                        tui.title_generation_pending = true;
+                        spawn_title_generation(&app, tx.clone());
+                    }
                 }
                 _ => {}
             }
         }
     }
 
-    // Save on exit if there's content
+    // Regenerate title with animated exit screen, then save
+    regenerate_title_with_exit_animation(&mut app, &mut terminal);
     session::save_current_session(&mut app);
 
     ratatui::restore();
@@ -782,5 +801,162 @@ fn spawn_model_fetch(app: &App, tx: mpsc::Sender<Action>) {
         if tx.send(Action::ModelsFetched(all_models)).is_err() {
             warn!("Failed to send ModelsFetched: receiver dropped");
         }
+    });
+}
+
+/// Returns true if the session title is empty or still the default "Session #N".
+fn needs_title_generation(app: &App) -> bool {
+    let title = app.session_title.trim();
+    if title.is_empty() {
+        return true;
+    }
+    // Match "Session #<digits>"
+    title
+        .strip_prefix("Session #")
+        .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// Spawns a background task to generate a session title after the first model response.
+fn spawn_title_generation(app: &App, tx: mpsc::Sender<Action>) {
+    let Some(input) = title::first_exchange(&app.context.items) else {
+        debug!("Title generation skipped: no user/model message pair found");
+        return;
+    };
+
+    let provider = app.provider.clone();
+    let model_name = app.model_name.clone();
+    info!("Spawning title generation task");
+
+    tokio::spawn(async move {
+        let task = title::title_prompt(provider, &model_name);
+        if let Some(t) = title::generate_title(&task, input).await {
+            info!("Title generated: {}", t);
+            if tx.send(Action::SessionTitleGenerated(t)).is_err() {
+                warn!("Failed to send SessionTitleGenerated: receiver dropped");
+            }
+        }
+    });
+}
+
+/// Regenerates the session title while showing an animated exit screen.
+///
+/// Spawns a summarize→title pipeline as a background task, then runs a draw loop
+/// showing the logo animation until the task completes or times out.
+fn regenerate_title_with_exit_animation(
+    app: &mut App,
+    terminal: &mut ratatui::DefaultTerminal,
+) {
+    let Some(transcript) = title::conversation_transcript(&app.context.items) else {
+        return;
+    };
+
+    let provider = app.provider.clone();
+    let model_name = app.model_name.clone();
+    info!("Regenerating title on quit (animated, summarize→title)");
+
+    // Spawn summarize→title pipeline and get a oneshot receiver for the result
+    let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        let task = title::summarize_then_title(provider, &model_name);
+        let _ = result_tx.send(title::generate_title(&task, transcript).await);
+    });
+
+    // Animate until the result arrives (or timeout after 15s for the two-step pipeline)
+    let start = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(15);
+    let mut frame_counter: usize = 0;
+    let mut result_rx = Some(result_rx);
+
+    loop {
+        // Check if result is ready (non-blocking)
+        if let Some(ref mut rx) = result_rx {
+            match rx.try_recv() {
+                Ok(title) => {
+                    if let Some(title) = title {
+                        info!("Exit-time title: {}", title);
+                        app.session_title = title;
+                    }
+                    break;
+                }
+                Err(tokio::sync::oneshot::error::TryRecvError::Closed) => break,
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {} // Still waiting
+            }
+        }
+
+        // Timeout guard
+        if start.elapsed() > timeout {
+            warn!("Title generation timed out on exit");
+            break;
+        }
+
+        // Draw frame
+        draw_exit_screen(terminal, frame_counter);
+        frame_counter += 1;
+
+        std::thread::sleep(std::time::Duration::from_millis(80));
+    }
+}
+
+/// Spawns a background task to regenerate the session title for a session being switched away from.
+///
+/// Runs the full summarize→title pipeline async, then writes the result to disk
+/// via `rename_session`. Non-blocking — the UI continues immediately.
+fn spawn_title_regeneration_for_outgoing(app: &App) {
+    let Some(session_id) = app.current_session_id.clone() else {
+        return; // Unsaved session — nothing to rename
+    };
+    let Some(transcript) = title::conversation_transcript(&app.context.items) else {
+        return;
+    };
+
+    let provider = app.provider.clone();
+    let model_name = app.model_name.clone();
+    info!(
+        "Spawning background title regeneration for outgoing session {}",
+        session_id
+    );
+
+    tokio::spawn(async move {
+        let task = title::summarize_then_title(provider, &model_name);
+        if let Some(t) = title::generate_title(&task, transcript).await {
+            info!("Outgoing session {} title: {}", session_id, t);
+            if let Err(e) = session::rename_session(&session_id, &t) {
+                warn!("Failed to rename outgoing session {}: {}", session_id, e);
+            }
+        }
+    });
+}
+
+/// Draws the animated exit screen: logo + message.
+fn draw_exit_screen(terminal: &mut ratatui::DefaultTerminal, frame_index: usize) {
+    use crate::tui::components::logo::Logo;
+    use ratatui::layout::{Alignment, Constraint, Flex, Layout};
+    use ratatui::style::{Color, Style};
+    use ratatui::widgets::Paragraph;
+
+    let _ = terminal.draw(|frame| {
+        let area = frame.area();
+        let logo_height = Logo::required_height().min(area.height.saturating_sub(4));
+
+        let [_, logo_area, text_area, _] = Layout::vertical([
+            Constraint::Fill(1),
+            Constraint::Length(logo_height),
+            Constraint::Length(2),
+            Constraint::Fill(1),
+        ])
+        .split(area)[..] else {
+            return;
+        };
+
+        Logo::render(frame, logo_area, frame_index);
+
+        let [text_centered] = Layout::horizontal([Constraint::Length(40)])
+            .flex(Flex::Center)
+            .areas(text_area);
+
+        let text = Paragraph::new("Tidying up your session...")
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(Color::DarkGray));
+        frame.render_widget(text, text_centered);
     });
 }

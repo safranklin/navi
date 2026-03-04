@@ -44,6 +44,7 @@ pub enum TaskError {
     /// The underlying provider failed (network, API, channel closed).
     Provider(ProviderError),
     /// Output parsing/transformation failed (e.g. invalid JSON from `.map()`).
+    #[allow(dead_code)] // Used by .map() combinator — real callers land later.
     Parse(String),
 }
 
@@ -105,6 +106,7 @@ pub trait Task: Send + Sync {
     /// This is how you go from `String` (what LLMs produce) to typed data
     /// (what your application needs). The function can fail with `TaskError::Parse`
     /// if the model's output doesn't match the expected format.
+    #[allow(dead_code)] // Combinator infrastructure — consumed by tests, real callers land later.
     fn map<F, O>(self, f: F) -> Map<Self, F>
     where
         Self: Sized,
@@ -171,6 +173,7 @@ impl Prompt {
 
     /// Set the reasoning effort level. Higher effort = more reasoning tokens = better
     /// quality but higher cost. Default is `None` (no reasoning).
+    #[allow(dead_code)] // Builder method — real callers land later.
     pub fn effort(mut self, effort: Effort) -> Self {
         self.effort = effort;
         self
@@ -191,6 +194,7 @@ impl Prompt {
     /// ```ignore
     /// prompt.json().map(|text| serde_json::from_str(&text).map_err(|e| TaskError::Parse(e.to_string())))
     /// ```
+    #[allow(dead_code)] // Builder method — real callers land later.
     pub fn json(mut self) -> Self {
         self.response_format = Some(ResponseFormat::Json);
         self
@@ -277,6 +281,7 @@ where
 /// the output doesn't match expectations.
 ///
 /// The function must be `Fn` (not `FnOnce`) because tasks are reusable via `&self`.
+#[allow(dead_code)] // Combinator infrastructure — consumed by tests, real callers land later.
 pub struct Map<T, F> {
     inner: T,
     f: F,

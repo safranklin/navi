@@ -270,7 +270,7 @@ impl Effort {
 /// Response format hint for the provider.
 /// `Json` activates constrained JSON generation (provider sends `{"type":"json_object"}`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // Infrastructure — consumed by task::Prompt, real callers land soon.
+#[allow(dead_code)] // Variants used by task::Prompt tests; direct callers land later.
 pub enum ResponseFormat {
     Text,
     Json,

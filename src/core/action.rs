@@ -52,6 +52,8 @@ pub enum Action {
     NewSession,
     // Dynamic models fetched from provider APIs (handled by TUI, not core)
     ModelsFetched(Vec<ModelEntry>),
+    // Background title generation completed
+    SessionTitleGenerated(String),
 }
 
 #[derive(Debug, PartialEq)]
@@ -255,6 +257,10 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
         // ModelsFetched is TUI-only state — core update() is a no-op.
         // The TUI event loop intercepts this before it reaches update().
         Action::ModelsFetched(_) => Effect::None,
+        Action::SessionTitleGenerated(title) => {
+            app_state.session_title = title;
+            Effect::SaveSession
+        }
     }
 }
 
@@ -537,6 +543,34 @@ mod tests {
         assert!(app.status_message.contains("100 in"));
         assert!(app.status_message.contains("30 out"));
         assert!(app.status_message.contains("TTFT 250ms"));
+        assert_eq!(effect, Effect::SaveSession);
+    }
+
+    #[test]
+    fn test_session_title_generated_sets_title() {
+        let mut app = test_app();
+        app.session_title = String::new();
+
+        let effect = update(
+            &mut app,
+            Action::SessionTitleGenerated("Chat about Rust lifetimes".to_string()),
+        );
+
+        assert_eq!(app.session_title, "Chat about Rust lifetimes");
+        assert_eq!(effect, Effect::SaveSession);
+    }
+
+    #[test]
+    fn test_session_title_generated_overwrites_existing() {
+        let mut app = test_app();
+        app.session_title = "Session #3".to_string();
+
+        let effect = update(
+            &mut app,
+            Action::SessionTitleGenerated("Debugging memory leaks".to_string()),
+        );
+
+        assert_eq!(app.session_title, "Debugging memory leaks");
         assert_eq!(effect, Effect::SaveSession);
     }
 
