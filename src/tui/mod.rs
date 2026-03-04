@@ -22,11 +22,12 @@
 mod component;
 mod components;
 mod event;
+mod handlers;
 pub mod markdown;
 mod tasks;
 mod ui;
 
-use log::{debug, info, warn};
+use log::{debug, info};
 use std::io::stdout;
 use std::sync::mpsc;
 
@@ -43,8 +44,6 @@ use crate::core::session;
 use crate::core::state::App;
 use crate::inference::{ContextItem, Effort};
 use crate::tui::component::EventHandler;
-use crate::tui::components::model_picker::ModelPickerEvent;
-use crate::tui::components::session_manager::SessionEvent;
 use crate::tui::components::{
     InputBox, InputEvent, MessageListState, ModelPickerState, SessionManagerState,
 };
@@ -228,96 +227,21 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
             }
 
             // When model picker is open, route all events to it
-            if let Some(ref mut mp) = tui.model_picker {
-                if let Some(picker_event) = mp.handle_event(&event) {
-                    match picker_event {
-                        ModelPickerEvent::Select(entry) => {
-                            // Build a new resolved config with the selected model/provider
-                            let mut new_config = config.clone();
-                            new_config.provider = entry.provider.clone();
-                            new_config.model_name = entry.name.clone();
-
-                            // Rebuild the provider for the new model
-                            app.provider = crate::inference::build_provider(&new_config);
-                            app.model_name = entry.name.clone();
-                            app.provider_name = entry.provider.clone();
-                            app.status_message =
-                                format!("Switched to {} ({})", entry.name, entry.provider);
-                            info!("Model switched: {} ({})", entry.name, entry.provider);
-                            tui.model_picker = None;
-                        }
-                        ModelPickerEvent::Dismiss => {
-                            tui.model_picker = None;
-                        }
-                    }
+            if tui.model_picker.is_some() {
+                let picker_event = tui.model_picker.as_mut().unwrap().handle_event(&event);
+                if let Some(ev) = picker_event {
+                    handlers::handle_model_picker_event(ev, &mut app, &mut tui, &config);
                 }
                 continue;
             }
 
             // When session manager is open, route all events to it
-            if let Some(ref mut sm) = tui.session_manager {
-                if let Some(session_event) = sm.handle_event(&event) {
-                    match session_event {
-                        SessionEvent::Load(id) => {
-                            // Save outgoing session and regenerate its title in the background
-                            session::save_current_session(&mut app);
-                            tasks::spawn_title_regeneration_for_outgoing(&app);
-
-                            match session::load_session(&id) {
-                                Ok(data) => {
-                                    let effect = update(&mut app, Action::LoadSession(data));
-                                    if effect == Effect::Quit {
-                                        should_quit = true;
-                                    }
-                                    tui.message_list = MessageListState::new();
-                                    tui.title_generation_pending = false;
-                                }
-                                Err(e) => {
-                                    warn!("Failed to load session {}: {}", id, e);
-                                    app.status_message = format!("Load failed: {}", e);
-                                }
-                            }
-                            tui.session_manager = None;
-                        }
-                        SessionEvent::CreateNew => {
-                            // Save outgoing session and regenerate its title in the background
-                            session::save_current_session(&mut app);
-                            tasks::spawn_title_regeneration_for_outgoing(&app);
-
-                            let effect = update(&mut app, Action::NewSession);
-                            if effect == Effect::Quit {
-                                should_quit = true;
-                            }
-                            // Assign "Session #N" title immediately
-                            app.session_title =
-                                format!("Session #{}", session::next_session_number());
-                            tui.message_list = MessageListState::new();
-                            tui.title_generation_pending = false;
-                            tui.session_manager = None;
-                        }
-                        SessionEvent::Rename { id, new_title } => {
-                            if let Err(e) = session::rename_session(&id, &new_title) {
-                                warn!("Failed to rename session {}: {}", id, e);
-                            }
-                            // Update active session title if renaming the current one
-                            if app.current_session_id.as_deref() == Some(&id) {
-                                app.session_title = new_title;
-                            }
-                        }
-                        SessionEvent::Delete(id) => {
-                            if let Err(e) = session::delete_session(&id) {
-                                warn!("Failed to delete session {}: {}", id, e);
-                            }
-                            sm.remove_session(&id);
-                            // If we deleted the active session, clear the ID
-                            if app.current_session_id.as_deref() == Some(&id) {
-                                app.current_session_id = None;
-                            }
-                        }
-                        SessionEvent::Dismiss => {
-                            tui.session_manager = None;
-                        }
-                    }
+            if tui.session_manager.is_some() {
+                let session_event = tui.session_manager.as_mut().unwrap().handle_event(&event);
+                if let Some(ev) = session_event
+                    && handlers::handle_session_event(ev, &mut app, &mut tui)
+                {
+                    should_quit = true;
                 }
                 continue;
             }
