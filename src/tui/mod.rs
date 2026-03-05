@@ -22,11 +22,12 @@
 mod component;
 mod components;
 mod event;
+mod handlers;
 pub mod markdown;
 mod tasks;
 mod ui;
 
-use log::{debug, info, warn};
+use log::info;
 use std::io::stdout;
 use std::sync::mpsc;
 
@@ -37,18 +38,12 @@ use crossterm::event::{
 };
 use crossterm::execute;
 
-use crate::core::action::{Action, Effect, update};
 use crate::core::config::{ModelEntry, ResolvedConfig};
 use crate::core::session;
 use crate::core::state::App;
-use crate::inference::{ContextItem, Effort};
-use crate::tui::component::EventHandler;
-use crate::tui::components::model_picker::ModelPickerEvent;
-use crate::tui::components::session_manager::SessionEvent;
-use crate::tui::components::{
-    InputBox, InputEvent, MessageListState, ModelPickerState, SessionManagerState,
-};
-use crate::tui::event::{TuiEvent, poll_event_immediate, poll_event_timeout};
+use crate::inference::Effort;
+use crate::tui::components::{InputBox, MessageListState, ModelPickerState, SessionManagerState};
+use crate::tui::event::{poll_event_immediate, poll_event_timeout};
 
 /// Modal input mode: determines how keyboard events are interpreted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,6 +69,8 @@ pub struct TuiState {
     pub model_picker: Option<ModelPickerState>,
     // Pre-fetched models from provider APIs (populated at startup)
     pub fetched_models: Option<Vec<ModelEntry>>,
+    // Abort handles for the current generation (used by Escape-to-cancel)
+    pub active_abort_handles: Vec<tokio::task::AbortHandle>,
 }
 
 impl TuiState {
@@ -86,6 +83,7 @@ impl TuiState {
             session_manager: None,
             model_picker: None,
             fetched_models: None,
+            active_abort_handles: Vec::new(),
         }
     }
 }
@@ -154,9 +152,6 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
     // Fetch available models from providers in the background at startup
     tasks::spawn_model_fetch(&app, tx.clone());
 
-    // Abort handles for the current generation (used by Escape-to-cancel)
-    let mut active_abort_handles: Vec<tokio::task::AbortHandle> = Vec::new();
-
     // Animation timer
     let start_time = std::time::Instant::now();
     let mut needs_redraw = true; // Force first frame
@@ -195,321 +190,13 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
         if first_event.is_some() {
             needs_redraw = true;
         }
+        let frame_area = terminal.get_frame().area();
         for event in first_event
             .into_iter()
             .chain(std::iter::from_fn(poll_event_immediate))
         {
-            // Resize just needs a redraw (already flagged above)
-            if matches!(event, TuiEvent::Resize) {
-                continue;
-            }
-
-            // ForceQuit (Ctrl+C) always quits regardless of mode
-            if matches!(event, TuiEvent::ForceQuit) {
-                let effect = update(&mut app, Action::Quit);
-                if effect == Effect::Quit {
-                    should_quit = true;
-                }
-                continue;
-            }
-
-            // Ctrl+O opens session manager
-            if matches!(event, TuiEvent::OpenSessionManager) {
-                let index = session::load_index().unwrap_or_default();
-                tui.session_manager = Some(SessionManagerState::new(index.sessions));
-                continue;
-            }
-
-            // Ctrl+P opens model picker (models pre-fetched at startup)
-            if matches!(event, TuiEvent::OpenModelPicker) {
-                let mut picker = ModelPickerState::new(app.available_models.clone());
-                if let Some(ref models) = tui.fetched_models {
-                    picker.set_fetched_models(models.clone());
-                }
-                tui.model_picker = Some(picker);
-                continue;
-            }
-
-            // When model picker is open, route all events to it
-            if let Some(ref mut mp) = tui.model_picker {
-                if let Some(picker_event) = mp.handle_event(&event) {
-                    match picker_event {
-                        ModelPickerEvent::Select(entry) => {
-                            let effect = update(
-                                &mut app,
-                                Action::SwitchModel {
-                                    name: entry.name.clone(),
-                                    provider: entry.provider.clone(),
-                                },
-                            );
-                            if effect == Effect::RebuildProvider {
-                                let mut new_config = config.clone();
-                                new_config.provider = entry.provider.clone();
-                                new_config.model_name = entry.name.clone();
-                                app.provider = crate::inference::build_provider(&new_config);
-                            }
-                            info!("Model switched: {} ({})", entry.name, entry.provider);
-                            tui.model_picker = None;
-                        }
-                        ModelPickerEvent::Dismiss => {
-                            tui.model_picker = None;
-                        }
-                    }
-                }
-                continue;
-            }
-
-            // When session manager is open, route all events to it
-            if let Some(ref mut sm) = tui.session_manager {
-                if let Some(session_event) = sm.handle_event(&event) {
-                    match session_event {
-                        SessionEvent::Load(id) => {
-                            match session::load_session(&id) {
-                                Ok(data) => {
-                                    let effect = update(&mut app, Action::LoadSession(data));
-                                    if effect == Effect::Quit {
-                                        should_quit = true;
-                                    }
-                                    tui.message_list = MessageListState::new();
-                                }
-                                Err(e) => {
-                                    warn!("Failed to load session {}: {}", id, e);
-                                    app.session.status_message = format!("Load failed: {}", e);
-                                }
-                            }
-                            tui.session_manager = None;
-                        }
-                        SessionEvent::CreateNew => {
-                            let title =
-                                format!("Session #{}", session::next_session_number());
-                            let effect =
-                                update(&mut app, Action::NewSession { title });
-                            if effect == Effect::Quit {
-                                should_quit = true;
-                            }
-                            tui.message_list = MessageListState::new();
-                            tui.session_manager = None;
-                        }
-                        SessionEvent::Rename { id, new_title } => {
-                            if let Err(e) = session::rename_session(&id, &new_title) {
-                                warn!("Failed to rename session {}: {}", id, e);
-                            }
-                            let effect =
-                                update(&mut app, Action::SessionRenamed { id, new_title });
-                            if effect == Effect::Quit {
-                                should_quit = true;
-                            }
-                        }
-                        SessionEvent::Delete(id) => {
-                            let is_active = app.session.current_session_id.as_deref() == Some(&id);
-                            if let Err(e) = session::delete_session(&id) {
-                                warn!("Failed to delete session {}: {}", id, e);
-                            }
-                            sm.remove_session(&id);
-                            let effect = update(&mut app, Action::SessionDeleted(id));
-                            if is_active {
-                                tui.message_list = MessageListState::new();
-                            }
-                            if effect == Effect::Quit {
-                                should_quit = true;
-                            }
-                        }
-                        SessionEvent::Dismiss => {
-                            tui.session_manager = None;
-                        }
-                    }
-                }
-                continue;
-            }
-
-            // Mouse hover — always active regardless of mode
-            if let TuiEvent::MouseMove(_col, row) = event {
-                let frame_area = terminal.get_frame().area();
-                let scroll_offset = tui.message_list.scroll_state.offset().y;
-                let input_height = tui.input_box.calculate_height(frame_area.width);
-
-                tui.message_list.selected_index = ui::hit_test_message(
-                    row,
-                    frame_area,
-                    scroll_offset,
-                    &tui.message_list.layout.prefix_heights,
-                    input_height,
-                );
-                continue;
-            }
-
-            // Mouse click — toggle expansion on tool calls
-            if let TuiEvent::MouseClick(_col, row) = event {
-                let frame_area = terminal.get_frame().area();
-                let scroll_offset = tui.message_list.scroll_state.offset().y;
-                let input_height = tui.input_box.calculate_height(frame_area.width);
-
-                let hit = ui::hit_test_message(
-                    row,
-                    frame_area,
-                    scroll_offset,
-                    &tui.message_list.layout.prefix_heights,
-                    input_height,
-                );
-
-                if let Some(idx) = hit {
-                    tui.message_list.selected_index = Some(idx);
-                    if matches!(app.session.context.items.get(idx), Some(ContextItem::ToolCall(_)))
-                        && !tui.message_list.expanded_indices.remove(&idx)
-                    {
-                        tui.message_list.expanded_indices.insert(idx);
-                    }
-                }
-                continue;
-            }
-
-            // Scroll events — always go to MessageList regardless of mode
-            if matches!(
-                event,
-                TuiEvent::ScrollUp
-                    | TuiEvent::ScrollDown
-                    | TuiEvent::ScrollPageUp
-                    | TuiEvent::ScrollPageDown
-            ) {
-                tui.message_list.handle_event(&event);
-                continue;
-            }
-
-            // Modal event dispatch
-            match tui.input_mode {
-                InputMode::Input => {
-                    // Esc while loading → cancel generation
-                    if matches!(event, TuiEvent::Escape) && app.session.is_loading {
-                        for handle in active_abort_handles.drain(..) {
-                            handle.abort();
-                        }
-                        let effect = update(&mut app, Action::CancelGeneration);
-                        if effect == Effect::Quit {
-                            should_quit = true;
-                        }
-                        continue;
-                    }
-                    // Esc → switch to Cursor mode
-                    if matches!(event, TuiEvent::Escape) {
-                        tui.input_mode = InputMode::Cursor;
-                        // Select the last non-ToolResult item when entering Cursor mode
-                        let items = &app.session.context.items;
-                        let mut idx = items.len();
-                        while idx > 0 {
-                            idx -= 1;
-                            if !matches!(items[idx], ContextItem::ToolResult(_)) {
-                                break;
-                            }
-                        }
-                        tui.message_list.selected_index =
-                            if !items.is_empty() { Some(idx) } else { None };
-                        continue;
-                    }
-
-                    // InputBox handles everything else
-                    if let Some(input_event) = tui.input_box.handle_event(&event) {
-                        match input_event {
-                            InputEvent::Submit(text) => {
-                                if !app.session.is_loading {
-                                    let effect = update(&mut app, Action::Submit(text));
-                                    if effect == Effect::SpawnRequest {
-                                        active_abort_handles = tasks::spawn_request(&app, tx.clone());
-                                    }
-                                }
-                            }
-                            InputEvent::CycleEffort => {
-                                let effect = update(&mut app, Action::CycleEffort);
-                                if effect == Effect::Quit {
-                                    should_quit = true;
-                                }
-                            }
-                            InputEvent::ContentChanged => {}
-                        }
-                    }
-                }
-                InputMode::Cursor => {
-                    match event {
-                        // Esc while loading → cancel generation
-                        TuiEvent::Escape if app.session.is_loading => {
-                            for handle in active_abort_handles.drain(..) {
-                                handle.abort();
-                            }
-                            let effect = update(&mut app, Action::CancelGeneration);
-                            if effect == Effect::Quit {
-                                should_quit = true;
-                            }
-                        }
-                        // Esc in Cursor mode is a no-op
-                        TuiEvent::Escape => {}
-                        // Space toggles expansion of selected tool call
-                        TuiEvent::InputChar(' ') => {
-                            if let Some(idx) = tui.message_list.selected_index
-                                && matches!(
-                                    app.session.context.items.get(idx),
-                                    Some(ContextItem::ToolCall(_))
-                                )
-                                && !tui.message_list.expanded_indices.remove(&idx)
-                            {
-                                tui.message_list.expanded_indices.insert(idx);
-                            }
-                        }
-                        // Typing auto-switches to Input mode and forwards the event
-                        TuiEvent::InputChar(_) | TuiEvent::Paste(_) => {
-                            tui.input_mode = InputMode::Input;
-                            tui.message_list.selected_index = None;
-                            tui.input_box.handle_event(&event);
-                        }
-                        // Enter switches to Input mode
-                        TuiEvent::Submit => {
-                            tui.input_mode = InputMode::Input;
-                            tui.message_list.selected_index = None;
-                        }
-                        // Up/Down navigate messages (skipping consumed ToolResults)
-                        TuiEvent::CursorUp => {
-                            let items = &app.session.context.items;
-                            if !items.is_empty() {
-                                let mut idx = tui
-                                    .message_list
-                                    .selected_index
-                                    .map(|i| i.saturating_sub(1))
-                                    .unwrap_or(items.len() - 1);
-                                // Skip backwards past ToolResult items
-                                while idx > 0 && matches!(items[idx], ContextItem::ToolResult(_)) {
-                                    idx -= 1;
-                                }
-                                tui.message_list.selected_index = Some(idx);
-                                tui.message_list.scroll_to_selected();
-                            }
-                        }
-                        TuiEvent::CursorDown => {
-                            let items = &app.session.context.items;
-                            if let Some(mut idx) = tui.message_list.selected_index
-                                && idx + 1 < items.len()
-                            {
-                                idx += 1;
-                                // Skip forwards past ToolResult items
-                                while idx < items.len()
-                                    && matches!(items[idx], ContextItem::ToolResult(_))
-                                {
-                                    idx += 1;
-                                }
-                                // Only update if we landed on a valid index
-                                if idx < items.len() {
-                                    tui.message_list.selected_index = Some(idx);
-                                    tui.message_list.scroll_to_selected();
-                                }
-                            }
-                        }
-                        // CycleEffort works in both modes
-                        TuiEvent::CycleEffort => {
-                            let effect = update(&mut app, Action::CycleEffort);
-                            if effect == Effect::Quit {
-                                should_quit = true;
-                            }
-                        }
-                        _ => {}
-                    }
-                }
+            if handlers::handle_event(event, &mut app, &mut tui, &config, &tx, frame_area) {
+                should_quit = true;
             }
         }
 
@@ -518,38 +205,12 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
         }
 
         // Handle background task actions (streaming responses)
-        while let Ok(action) = rx.try_recv() {
+        let (quit, had_actions) = handlers::process_background_actions(&rx, &mut app, &mut tui, &tx);
+        if had_actions {
             needs_redraw = true;
-
-            // Intercept ModelsFetched — this is TUI-only state, not core business logic.
-            // Cache results for future picker opens; also update picker if currently open.
-            if let Action::ModelsFetched(models) = action {
-                debug!("Received {} fetched models", models.len());
-                tui.fetched_models = Some(models.clone());
-                if let Some(ref mut mp) = tui.model_picker {
-                    mp.set_fetched_models(models);
-                }
-                continue;
-            }
-
-            debug!("Event loop received: {:?}", action);
-            let effect = update(&mut app, action);
-            match effect {
-                Effect::Quit => break,
-                Effect::SpawnRequest => {
-                    active_abort_handles = tasks::spawn_request(&app, tx.clone());
-                }
-                Effect::ExecuteTool(tool_call) => {
-                    tasks::spawn_tool_execution(tool_call, app.registry.clone(), tx.clone());
-                }
-                Effect::SaveSession => {
-                    session::save_current_session(&mut app);
-                }
-                Effect::RebuildProvider => {
-                    warn!("Unexpected RebuildProvider from background action");
-                }
-                _ => {}
-            }
+        }
+        if quit {
+            break;
         }
     }
 
