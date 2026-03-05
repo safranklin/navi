@@ -3,9 +3,6 @@
 //! One-shot orchestration functions that kick off async work from the TUI
 //! event loop. Each function grabs the state it needs from `App`, spawns
 //! a `tokio` task, and pipes results back through the `Action` channel.
-//!
-//! These are distinct from `inference::task::Task` (composable async primitives).
-//! Think of these as job schedulers that *use* Task primitives internally.
 
 use log::{debug, info, warn};
 use std::sync::Arc;
@@ -253,18 +250,13 @@ pub fn spawn_model_fetch(app: &App, tx: mpsc::Sender<Action>) {
 
 /// Spawns a background task to generate a session title after the first model response.
 pub fn spawn_title_generation(app: &App, tx: mpsc::Sender<Action>) {
-    let Some(input) = title::first_exchange(&app.context.items) else {
-        debug!("Title generation skipped: no user/model message pair found");
-        return;
-    };
-
     let provider = app.provider.clone();
     let model_name = app.model_name.clone();
+    let items = app.context.items.clone();
     info!("Spawning title generation task");
 
     tokio::spawn(async move {
-        let task = title::title_prompt(provider, &model_name);
-        if let Some(t) = title::generate_title(&task, input).await {
+        if let Some(t) = title::generate_title(provider, &model_name, &items).await {
             info!("Title generated: {}", t);
             if tx.send(Action::SessionTitleGenerated(t)).is_err() {
                 warn!("Failed to send SessionTitleGenerated: receiver dropped");
@@ -275,26 +267,23 @@ pub fn spawn_title_generation(app: &App, tx: mpsc::Sender<Action>) {
 
 /// Spawns a background title regeneration for a session being switched away from.
 ///
-/// Runs the full summarize→title pipeline async, then writes the result to disk
-/// via `rename_session`. Non-blocking — the UI continues immediately.
+/// Runs summarize→title async, then writes the result to disk via `rename_session`.
+/// Non-blocking — the UI continues immediately.
 pub fn spawn_title_regeneration_for_outgoing(app: &App) {
     let Some(session_id) = app.current_session_id.clone() else {
         return; // Unsaved session — nothing to rename
     };
-    let Some(transcript) = title::conversation_transcript(&app.context.items) else {
-        return;
-    };
 
     let provider = app.provider.clone();
     let model_name = app.model_name.clone();
+    let items = app.context.items.clone();
     info!(
         "Spawning background title regeneration for outgoing session {}",
         session_id
     );
 
     tokio::spawn(async move {
-        let task = title::summarize_then_title(provider, &model_name);
-        if let Some(t) = title::generate_title(&task, transcript).await {
+        if let Some(t) = title::generate_title(provider, &model_name, &items).await {
             info!("Outgoing session {} title: {}", session_id, t);
             if let Err(e) = session::rename_session(&session_id, &t) {
                 warn!("Failed to rename outgoing session {}: {}", session_id, e);
@@ -305,25 +294,21 @@ pub fn spawn_title_regeneration_for_outgoing(app: &App) {
 
 /// Regenerates the session title while showing an animated exit screen.
 ///
-/// Spawns a summarize→title pipeline as a background task, then runs a draw loop
-/// showing the logo animation until the task completes or times out.
+/// Spawns summarize→title as a background task, then runs a draw loop showing
+/// the logo animation until the task completes or times out.
 pub fn regenerate_title_with_exit_animation(
     app: &mut App,
     terminal: &mut ratatui::DefaultTerminal,
 ) {
-    let Some(transcript) = title::conversation_transcript(&app.context.items) else {
-        return;
-    };
-
     let provider = app.provider.clone();
     let model_name = app.model_name.clone();
+    let items = app.context.items.clone();
     info!("Regenerating title on quit (animated, summarize→title)");
 
-    // Spawn summarize→title pipeline and get a oneshot receiver for the result
+    // Spawn summarize→title and get a oneshot receiver for the result
     let (result_tx, result_rx) = tokio::sync::oneshot::channel();
     tokio::spawn(async move {
-        let task = title::summarize_then_title(provider, &model_name);
-        let _ = result_tx.send(title::generate_title(&task, transcript).await);
+        let _ = result_tx.send(title::generate_title(provider, &model_name, &items).await);
     });
 
     // Animate until the result arrives (or timeout after 15s for the two-step pipeline)

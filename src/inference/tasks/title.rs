@@ -1,63 +1,99 @@
-//! Title generation pipeline.
+//! Title generation for sessions.
 //!
-//! Two modes:
-//! - **First response**: extract the first user+model exchange, run a single title prompt.
-//! - **Close time / session switch**: build a full transcript, summarize → title via `Chain`.
-//!
-//! Input builders take `&[ContextItem]` so they're decoupled from `App` / TUI state.
+//! One public function: `generate_title()`. Internally runs two LLM calls —
+//! summarize the conversation, then generate a title from the summary.
 
 use std::sync::Arc;
 
 use log::warn;
 
-use crate::inference::provider::CompletionProvider;
-use crate::inference::task::{Chain, Prompt, Task};
-use crate::inference::types::{ContextItem, Source};
+use crate::inference::provider::{CompletionProvider, CompletionRequest, ProviderError};
+use crate::inference::types::{Context, ContextItem, Effort, Source, StreamChunk};
 
-// ============================================================================
-// Input builders
-// ============================================================================
-
-/// Extracts the first user + model exchange from context items, truncated.
+/// Generate a session title from conversation context.
 ///
-/// Returns a formatted string like `"<user text>\n---\n<model text>"`, suitable
-/// for feeding directly into `title_prompt().run()`. Returns `None` if the
-/// context doesn't yet contain both a user and model message.
-pub fn first_exchange(items: &[ContextItem]) -> Option<String> {
-    let mut user_msg = None;
-    let mut model_msg = None;
+/// Builds a transcript from context items, summarizes it (128 tokens), then
+/// generates a concise title from the summary (24 tokens). Returns `None` if
+/// there's nothing to summarize or either LLM call fails.
+pub async fn generate_title(
+    provider: Arc<dyn CompletionProvider>,
+    model: &str,
+    items: &[ContextItem],
+) -> Option<String> {
+    let transcript = conversation_transcript(items)?;
 
-    for item in items {
-        if let ContextItem::Message(seg) = item {
-            match seg.source {
-                Source::User if user_msg.is_none() => {
-                    user_msg = Some(&seg.content);
-                }
-                Source::Model if model_msg.is_none() => {
-                    model_msg = Some(&seg.content);
-                }
-                _ => {}
-            }
-        }
-        if user_msg.is_some() && model_msg.is_some() {
-            break;
-        }
-    }
+    let summary = run_prompt(
+        &*provider,
+        model,
+        "Summarize this conversation in 2-3 sentences. Focus on the main topics discussed \
+         and any key decisions or outcomes. Be concise.",
+        &transcript,
+        128,
+    )
+    .await
+    .map_err(|e| warn!("Title summarization failed: {e}"))
+    .ok()?;
 
-    let (user, model) = (user_msg?, model_msg?);
-    let user_trunc: String = user.chars().take(250).collect();
-    let model_trunc: String = model.chars().take(250).collect();
-    Some(format!("{user_trunc}\n---\n{model_trunc}"))
+    let title = run_prompt(
+        &*provider,
+        model,
+        "Generate a concise title (3-8 words) for this conversation. \
+         Return ONLY the title text, no quotes, no explanation.",
+        &summary,
+        24,
+    )
+    .await
+    .map_err(|e| warn!("Title generation failed: {e}"))
+    .ok()?;
+
+    let title = title.trim().to_string();
+    if title.is_empty() { None } else { Some(title) }
 }
 
-/// Builds a compact transcript of the full conversation for summarization.
+/// Run a single LLM prompt: system + user input → collected text output.
+async fn run_prompt(
+    provider: &dyn CompletionProvider,
+    model: &str,
+    system: &str,
+    input: &str,
+    max_tokens: u32,
+) -> Result<String, ProviderError> {
+    let mut context = Context::with_system_prompt(system.to_string());
+    context.add_user_message(input.to_string());
+
+    let (chunk_tx, mut chunk_rx) = tokio::sync::mpsc::channel::<StreamChunk>(64);
+
+    let collector = tokio::spawn(async move {
+        let mut output = String::new();
+        while let Some(chunk) = chunk_rx.recv().await {
+            if let StreamChunk::Content { text, .. } = chunk {
+                output.push_str(&text);
+            }
+        }
+        output
+    });
+
+    let request = CompletionRequest {
+        context: &context,
+        model,
+        effort: Effort::None,
+        tools: &[],
+        max_output_tokens: Some(max_tokens),
+        response_format: None,
+    };
+
+    provider.stream_completion(request, chunk_tx).await?;
+
+    let output = collector.await.expect("collector task panicked");
+    Ok(output)
+}
+
+/// Build a compact transcript of the full conversation for summarization.
 ///
-/// Walks all context items — user messages, model responses, tool calls, and
-/// tool results — and formats them into a labeled transcript. Each item is
-/// truncated to keep the total reasonable for a summarizer prompt.
-///
-/// Returns `None` if there are no user messages (nothing to summarize).
-pub fn conversation_transcript(items: &[ContextItem]) -> Option<String> {
+/// Walks all context items and formats them into a labeled transcript.
+/// Each item is truncated to keep the total reasonable for a summarizer prompt.
+/// Returns `None` if there are no user messages.
+fn conversation_transcript(items: &[ContextItem]) -> Option<String> {
     let mut transcript = String::new();
     let mut has_exchange = false;
 
@@ -89,75 +125,5 @@ pub fn conversation_transcript(items: &[ContextItem]) -> Option<String> {
         }
     }
 
-    if has_exchange {
-        Some(transcript)
-    } else {
-        None
-    }
-}
-
-// ============================================================================
-// Task factories
-// ============================================================================
-
-/// A single-step title prompt: `String -> String` (24 tokens max).
-///
-/// Suitable for lightweight title generation from a short input (e.g. the
-/// first exchange). For longer conversations, use `summarize_then_title()`
-/// which compresses the conversation first.
-pub fn title_prompt(provider: Arc<dyn CompletionProvider>, model: &str) -> Prompt {
-    Prompt::new(provider, model)
-        .system(
-            "Generate a concise title (3-8 words) for this conversation. \
-             Return ONLY the title text, no quotes, no explanation.",
-        )
-        .max_tokens(24)
-}
-
-/// Two-step pipeline: summarize (128 tokens) → title (24 tokens).
-///
-/// Uses `.then()` composition — first real consumer of the `Chain` combinator.
-/// The summarizer compresses a full conversation transcript into 2-3 sentences,
-/// then the titler generates a short title from that summary. This captures
-/// topic drift across long conversations without sending the full transcript
-/// to the title prompt.
-pub fn summarize_then_title(
-    provider: Arc<dyn CompletionProvider>,
-    model: &str,
-) -> Chain<Prompt, Prompt> {
-    let summarizer = Prompt::new(provider.clone(), model)
-        .system(
-            "Summarize this conversation in 2-3 sentences. Focus on the main topics discussed \
-             and any key decisions or outcomes. Be concise.",
-        )
-        .max_tokens(128);
-
-    let titler = title_prompt(provider, model);
-
-    summarizer.then(titler)
-}
-
-// ============================================================================
-// Runner
-// ============================================================================
-
-/// Runs a title-producing task, handling errors and empty results.
-///
-/// Trims the output, returns `None` if the model returned empty text or if
-/// the task failed (logged as a warning). This centralizes the error/empty
-/// handling that every caller needs.
-pub async fn generate_title(
-    task: &impl Task<Input = String, Output = String>,
-    input: String,
-) -> Option<String> {
-    match task.run(input).await {
-        Ok(t) => {
-            let t = t.trim().to_string();
-            if t.is_empty() { None } else { Some(t) }
-        }
-        Err(e) => {
-            warn!("Title generation failed: {}", e);
-            None
-        }
-    }
+    if has_exchange { Some(transcript) } else { None }
 }
