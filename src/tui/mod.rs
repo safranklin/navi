@@ -427,8 +427,10 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
                                 }
                             }
                             InputEvent::CycleEffort => {
-                                app.effort = app.effort.next();
-                                app.status_message = format!("Reasoning: {}", app.effort.label());
+                                let effect = update(&mut app, Action::CycleEffort);
+                                if effect == Effect::Quit {
+                                    should_quit = true;
+                                }
                             }
                             InputEvent::ContentChanged => {}
                         }
@@ -509,8 +511,10 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
                         }
                         // CycleEffort works in both modes
                         TuiEvent::CycleEffort => {
-                            app.effort = app.effort.next();
-                            app.status_message = format!("Reasoning: {}", app.effort.label());
+                            let effect = update(&mut app, Action::CycleEffort);
+                            if effect == Effect::Quit {
+                                should_quit = true;
+                            }
                         }
                         _ => {}
                     }
