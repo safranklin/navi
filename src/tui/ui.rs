@@ -30,9 +30,9 @@ pub fn draw_ui(frame: &mut Frame, app: &App, tui: &mut TuiState, spinner_frame: 
 
     // 1. Render Main Area (MessageList or Error)
     // Rendered first so MessageList::render updates layout cache in TuiState.
-    if let Some(error_msg) = &app.error {
+    if let Some(error_msg) = &app.session.error {
         draw_error_view(frame, main_area, error_msg);
-    } else if !app.context.has_visible_messages() {
+    } else if !app.session.context.has_visible_messages() {
         // Render Landing Page
         let mut landing = crate::tui::components::LandingPage::new(spinner_frame);
         landing.render(frame, main_area);
@@ -40,11 +40,11 @@ pub fn draw_ui(frame: &mut Frame, app: &App, tui: &mut TuiState, spinner_frame: 
         // Create MessageList wrapper around mutable persistent state
         let mut message_list = MessageList::new(
             &mut tui.message_list, // &mut MessageListState
-            &app.context,
-            app.is_loading,
+            &app.session.context,
+            app.session.is_loading,
             tui.pulse_value,
             spinner_frame,
-            &app.message_stats,
+            &app.session.message_stats,
         );
         // Mutable render call updates layout cache and renders to scroll view
         message_list.render(frame, main_area);
@@ -54,10 +54,10 @@ pub fn draw_ui(frame: &mut Frame, app: &App, tui: &mut TuiState, spinner_frame: 
     let mut title_bar = TitleBar::new(
         &app.model_name,
         &app.provider_name,
-        app.is_loading,
+        app.session.is_loading,
         spinner_frame,
-        &app.session_title,
-        app.session_total_tokens,
+        &app.session.session_title,
+        app.session.session_total_tokens,
     );
     title_bar.render(frame, title_area);
 

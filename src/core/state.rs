@@ -5,23 +5,12 @@
 //!
 //! ```text
 //! App
-//! ├── provider: Arc<dyn CompletionProvider>  // LLM provider
-//! ├── context: Context              // conversation history
-//! ├── status_message: String        // status bar text
-//! ├── model_name: String            // current model
-//! ├── is_loading: bool              // waiting for API
-//! ├── effort: Effort                // reasoning effort level
-//! ├── error: Option<String>         // error message
-//! ├── registry: Arc<ToolRegistry>   // tool registry
-//! ├── pending_tool_calls: HashSet   // call_ids awaiting results
-//! ├── agentic_rounds: u8           // loop iteration counter
-//! ├── stream_done: bool            // SSE stream finished
-//! ├── had_tool_calls: bool         // tool calls received this round
-//! ├── usage_stats: UsageStats     // accumulated inference metrics
-//! ├── message_stats: HashMap      // per-message stats keyed by item index
-//! ├── provider_name: String       // active provider ("openrouter", "lmstudio")
-//! ├── session_total_tokens: u32   // running total across all submissions
-//! └── session_title: String       // display title ("Session #3" or custom)
+//! ├── provider: Arc<dyn CompletionProvider>  // LLM provider (config lifetime)
+//! ├── session: SessionState                  // per-conversation state
+//! ├── effort: Effort                         // reasoning effort level
+//! ├── registry: Arc<ToolRegistry>            // tool registry
+//! ├── provider_name: String                  // active provider name
+//! └── ... config-driven fields ...
 //! ```
 //!
 //! State changes only happen through `update(state, action)` in action.rs.
@@ -35,34 +24,54 @@ use crate::inference::{CompletionProvider, Context, Effort, ToolDefinition, Usag
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+/// Per-session state that gets fully replaced on NewSession / LoadSession.
+///
+/// Extracting this from App means session resets are a single assignment
+/// instead of resetting 13 fields individually.
+pub struct SessionState {
+    pub context: Context,
+    pub current_session_id: Option<String>,
+    pub session_title: String,
+    pub is_loading: bool,
+    pub pending_tool_calls: HashSet<String>,
+    pub stream_done: bool,
+    pub had_tool_calls: bool,
+    pub agentic_rounds: u8,
+    pub usage_stats: UsageStats,
+    pub message_stats: HashMap<usize, UsageStats>,
+    pub session_total_tokens: u32,
+    pub error: Option<String>,
+    pub status_message: String,
+}
+
+impl SessionState {
+    pub fn new(system_prompt: &str) -> Self {
+        Self {
+            context: Context::with_system_prompt(system_prompt.to_string()),
+            current_session_id: None,
+            session_title: String::new(),
+            is_loading: false,
+            pending_tool_calls: HashSet::new(),
+            stream_done: false,
+            had_tool_calls: false,
+            agentic_rounds: 0,
+            usage_stats: UsageStats::default(),
+            message_stats: HashMap::new(),
+            session_total_tokens: 0,
+            error: None,
+            status_message: String::from("Welcome to Navi!"),
+        }
+    }
+}
+
 pub struct App {
     pub provider: Arc<dyn CompletionProvider>,
-    pub context: Context,
-    pub status_message: String,
-    pub model_name: String,
-    pub is_loading: bool,
+    pub session: SessionState,
     pub effort: Effort,
-    pub error: Option<String>,
     pub registry: Arc<ToolRegistry>,
-    pub pending_tool_calls: HashSet<String>, // call_ids awaiting results
-    pub agentic_rounds: u8,
-    /// True after `ResponseDone` — the SSE stream has finished sending events.
-    pub stream_done: bool,
-    /// True if any `ToolCallReceived` arrived this round.
-    pub had_tool_calls: bool,
-    /// Accumulated usage stats for the current submission (across agentic rounds).
-    pub usage_stats: UsageStats,
-    /// Per-message usage stats, keyed by context item index.
-    /// Each model message gets the stats from its agentic round.
-    pub message_stats: HashMap<usize, UsageStats>,
-    /// Active session ID (None = unsaved new session).
-    pub current_session_id: Option<String>,
+    pub model_name: String,
     /// Provider name for the active model (e.g. "openrouter", "lmstudio").
     pub provider_name: String,
-    /// Running total of tokens across all submissions in this session.
-    pub session_total_tokens: u32,
-    /// Display title for the current session (e.g. "Session #3" or user-renamed).
-    pub session_title: String,
 
     // --- Config-driven fields ---
     pub max_agentic_rounds: u8,
@@ -80,23 +89,11 @@ impl App {
     pub fn new(provider: Arc<dyn CompletionProvider>, model_name: String) -> Self {
         Self {
             provider,
-            context: Context::new(),
-            status_message: String::from("Welcome to Navi!"),
+            session: SessionState::new(config::DEFAULT_SYSTEM_PROMPT),
             model_name,
-            is_loading: false,
             effort: Effort::default(),
-            error: None,
             registry: Arc::new(crate::core::tools::default_registry()),
-            pending_tool_calls: HashSet::new(),
-            agentic_rounds: 0,
-            stream_done: false,
-            had_tool_calls: false,
-            usage_stats: UsageStats::default(),
-            message_stats: HashMap::new(),
-            current_session_id: None,
             provider_name: String::new(),
-            session_total_tokens: 0,
-            session_title: String::new(),
             max_agentic_rounds: DEFAULT_MAX_AGENTIC_ROUNDS,
             max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
             system_prompt: config::DEFAULT_SYSTEM_PROMPT.to_string(),
@@ -111,23 +108,11 @@ impl App {
     pub fn from_config(provider: Arc<dyn CompletionProvider>, config: &ResolvedConfig) -> Self {
         Self {
             provider,
-            context: Context::with_system_prompt(config.system_prompt.clone()),
-            status_message: String::from("Welcome to Navi!"),
+            session: SessionState::new(&config.system_prompt),
             model_name: config.model_name.clone(),
-            is_loading: false,
             effort: config.effort,
-            error: None,
             registry: Arc::new(crate::core::tools::default_registry()),
-            pending_tool_calls: HashSet::new(),
-            agentic_rounds: 0,
-            stream_done: false,
-            had_tool_calls: false,
-            usage_stats: UsageStats::default(),
-            message_stats: HashMap::new(),
-            current_session_id: None,
             provider_name: config.provider.clone(),
-            session_total_tokens: 0,
-            session_title: String::new(),
             max_agentic_rounds: config.max_agentic_rounds,
             max_output_tokens: config.max_output_tokens,
             system_prompt: config.system_prompt.clone(),
@@ -150,8 +135,8 @@ mod tests {
     #[test]
     fn test_app_new_defaults() {
         let app = test_app();
-        assert_eq!(app.status_message, "Welcome to Navi!");
-        assert!(!app.is_loading);
+        assert_eq!(app.session.status_message, "Welcome to Navi!");
+        assert!(!app.session.is_loading);
         assert_eq!(app.model_name, "test-model");
     }
 }
