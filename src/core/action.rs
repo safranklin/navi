@@ -46,6 +46,8 @@ pub enum Action {
     },
     // User cancelled the in-progress generation
     CancelGeneration,
+    // Cycle to next reasoning effort level
+    CycleEffort,
     // Replace context with a loaded session
     LoadSession(SessionData),
     // Reset to a fresh conversation
@@ -252,6 +254,11 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
             app_state.status_message = String::from("New session.");
             Effect::Render
         }
+        Action::CycleEffort => {
+            app_state.effort = app_state.effort.next();
+            app_state.status_message = format!("Reasoning: {}", app_state.effort.label());
+            Effect::Render
+        }
         // ModelsFetched is TUI-only state — core update() is a no-op.
         // The TUI event loop intercepts this before it reaches update().
         Action::ModelsFetched(_) => Effect::None,
@@ -261,7 +268,7 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::inference::{ContextItem, Source};
+    use crate::inference::{ContextItem, Effort, Source};
     use crate::test_support::test_app;
 
     #[test]
@@ -538,6 +545,18 @@ mod tests {
         assert!(app.status_message.contains("30 out"));
         assert!(app.status_message.contains("TTFT 250ms"));
         assert_eq!(effect, Effect::SaveSession);
+    }
+
+    #[test]
+    fn test_cycle_effort_advances_and_updates_status() {
+        let mut app = test_app();
+        assert_eq!(app.effort, Effort::default()); // Auto
+
+        let effect = update(&mut app, Action::CycleEffort);
+
+        assert_eq!(app.effort, Effort::Low); // Auto -> Low
+        assert!(app.status_message.contains("Low"));
+        assert_eq!(effect, Effect::Render);
     }
 
     #[test]
