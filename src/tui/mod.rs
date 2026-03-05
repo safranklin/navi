@@ -180,10 +180,7 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
         tui.input_box.dimmed = matches!(tui.input_mode, InputMode::Cursor);
 
         // Determine if animations are running (landing page or loading spinner)
-        let has_visible_messages = app.context.items.iter().any(|item|
-            matches!(item, crate::inference::ContextItem::Message(seg) if matches!(seg.source, crate::inference::Source::User | crate::inference::Source::Model))
-        );
-        let animating = app.is_loading || !has_visible_messages;
+        let animating = app.is_loading || !app.context.has_visible_messages();
 
         if animating {
             needs_redraw = true;

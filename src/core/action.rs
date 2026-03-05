@@ -284,8 +284,10 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
             app_state.status_message = format!("Reasoning: {}", app_state.effort.label());
             Effect::Render
         }
-        // ModelsFetched is TUI-only state — core update() is a no-op.
-        // The TUI event loop intercepts this before it reaches update().
+        // ModelsFetched carries TUI-only state (picker list). The TUI event loop
+        // intercepts this action before it reaches update(). This no-op handler
+        // exists as a defensive fallthrough — if the TUI intercept is ever removed,
+        // core silently ignores it rather than panicking on an unhandled variant.
         Action::ModelsFetched(_) => Effect::None,
     }
 }
