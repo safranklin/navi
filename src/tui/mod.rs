@@ -128,6 +128,15 @@ impl Drop for TerminalModeGuard {
             DisableBracketedPaste,
             Hide // Hide cursor on exit
         );
+
+        // Drain any buffered mouse/keyboard events before restoring the terminal.
+        // If ratatui::restore() disables raw mode while mouse tracking escape
+        // sequences are still buffered, they leak as visible garbage (e.g. "35;37;36M").
+        while crossterm::event::poll(std::time::Duration::ZERO).unwrap_or(false) {
+            let _ = crossterm::event::read();
+        }
+
+        ratatui::restore();
     }
 }
 
@@ -565,7 +574,9 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
     // Save on exit if there's content
     session::save_current_session(&mut app);
 
-    ratatui::restore();
+    // Terminal restoration happens in TerminalModeGuard::drop() — it disables
+    // mouse capture, drains buffered events, then calls ratatui::restore().
+    // This ordering prevents escape sequence garbage on exit.
     Ok(())
 }
 
