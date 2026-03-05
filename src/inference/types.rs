@@ -215,6 +215,13 @@ impl Context {
         }
     }
 
+    /// Returns true if any User or Model messages exist in the context.
+    pub fn has_visible_messages(&self) -> bool {
+        self.items.iter().any(|item| {
+            matches!(item, ContextItem::Message(seg) if matches!(seg.source, Source::User | Source::Model))
+        })
+    }
+
     /// Clears the active stream routing map. Called when a response completes.
     pub fn clear_active_streams(&mut self) {
         self.active_streams.clear();
