@@ -323,11 +323,15 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
                             }
                         }
                         SessionEvent::Delete(id) => {
+                            let is_active = app.session.current_session_id.as_deref() == Some(&id);
                             if let Err(e) = session::delete_session(&id) {
                                 warn!("Failed to delete session {}: {}", id, e);
                             }
                             sm.remove_session(&id);
                             let effect = update(&mut app, Action::SessionDeleted(id));
+                            if is_active {
+                                tui.message_list = MessageListState::new();
+                            }
                             if effect == Effect::Quit {
                                 should_quit = true;
                             }

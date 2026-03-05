@@ -256,7 +256,8 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
         }
         Action::SessionDeleted(id) => {
             if app_state.session.current_session_id.as_deref() == Some(&id) {
-                app_state.session.current_session_id = None;
+                app_state.session = SessionState::new(&app_state.system_prompt);
+                app_state.session.status_message = String::from("Session deleted.");
             }
             Effect::Render
         }
@@ -615,13 +616,25 @@ mod tests {
     }
 
     #[test]
-    fn test_session_deleted_clears_active_session() {
+    fn test_session_deleted_resets_context_when_active() {
         let mut app = test_app();
         app.session.current_session_id = Some("sess-1".to_string());
+        app.session.context.add_user_message("hello".to_string());
+        app.session.is_loading = true;
+        app.session.session_title = "My Session".to_string();
 
         let effect = update(&mut app, Action::SessionDeleted("sess-1".to_string()));
 
+        // Full reset: context cleared, session ID gone, not loading
         assert!(app.session.current_session_id.is_none());
+        assert!(!app.session.is_loading);
+        assert!(app.session.session_title.is_empty());
+        // Only the system directive should remain
+        assert_eq!(app.session.context.items.len(), 1);
+        assert!(matches!(
+            &app.session.context.items[0],
+            ContextItem::Message(seg) if seg.source == Source::Directive
+        ));
         assert_eq!(effect, Effect::Render);
     }
 
