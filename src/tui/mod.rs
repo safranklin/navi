@@ -28,7 +28,7 @@ mod ui;
 
 use log::{debug, info, warn};
 use std::io::stdout;
-use std::sync::{Arc, mpsc};
+use std::sync::mpsc;
 
 use crossterm::cursor::{Hide, SetCursorStyle, Show};
 use crossterm::event::{
@@ -41,10 +41,7 @@ use crate::core::action::{Action, Effect, update};
 use crate::core::config::{ModelEntry, ResolvedConfig};
 use crate::core::session;
 use crate::core::state::App;
-use crate::inference::Effort;
-use crate::inference::{
-    CompletionProvider, ContextItem, LmStudioProvider, OpenRouterProvider,
-};
+use crate::inference::{ContextItem, Effort};
 use crate::tui::component::EventHandler;
 use crate::tui::components::model_picker::ModelPickerEvent;
 use crate::tui::components::session_manager::SessionEvent;
@@ -139,26 +136,8 @@ impl Drop for TerminalModeGuard {
     }
 }
 
-/// Build a provider from a resolved config's provider name and credentials.
-pub fn build_provider(config: &ResolvedConfig) -> Arc<dyn CompletionProvider> {
-    match config.provider.as_str() {
-        "lmstudio" => Arc::new(LmStudioProvider::new(config.lmstudio_base_url.clone())),
-        _ => {
-            // Default to openrouter
-            let api_key = config
-                .openrouter_api_key
-                .clone()
-                .expect("OpenRouter API key must be set (config file, OPENROUTER_API_KEY env var, or --provider lmstudio)");
-            Arc::new(OpenRouterProvider::new(
-                api_key,
-                Some(config.openrouter_base_url.clone()),
-            ))
-        }
-    }
-}
-
 pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
-    let provider = build_provider(&config);
+    let provider = crate::inference::build_provider(&config);
     let mut app = App::from_config(provider, &config);
     let mut tui = TuiState::new(app.effort);
 
@@ -267,7 +246,7 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
                                 let mut new_config = config.clone();
                                 new_config.provider = entry.provider.clone();
                                 new_config.model_name = entry.name.clone();
-                                app.provider = build_provider(&new_config);
+                                app.provider = crate::inference::build_provider(&new_config);
                             }
                             info!("Model switched: {} ({})", entry.name, entry.provider);
                             tui.model_picker = None;
