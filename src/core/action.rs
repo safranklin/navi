@@ -48,6 +48,8 @@ pub enum Action {
     CancelGeneration,
     // Cycle to next reasoning effort level
     CycleEffort,
+    // Switch to a different model/provider
+    SwitchModel { name: String, provider: String },
     // Replace context with a loaded session
     LoadSession(SessionData),
     // Reset to a fresh conversation
@@ -62,8 +64,9 @@ pub enum Effect {
     Render,
     Quit,
     SpawnRequest,
-    ExecuteTool(ToolCall), // Run a tool asynchronously
-    SaveSession,           // Persist current session to disk
+    ExecuteTool(ToolCall),  // Run a tool asynchronously
+    SaveSession,            // Persist current session to disk
+    RebuildProvider,        // Reconstruct the provider after model switch
 }
 
 /// Checks whether the current agentic round is fully complete (stream finished
@@ -253,6 +256,12 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
             app_state.error = None;
             app_state.status_message = String::from("New session.");
             Effect::Render
+        }
+        Action::SwitchModel { name, provider } => {
+            app_state.status_message = format!("Switched to {} ({})", name, provider);
+            app_state.model_name = name;
+            app_state.provider_name = provider;
+            Effect::RebuildProvider
         }
         Action::CycleEffort => {
             app_state.effort = app_state.effort.next();
@@ -545,6 +554,24 @@ mod tests {
         assert!(app.status_message.contains("30 out"));
         assert!(app.status_message.contains("TTFT 250ms"));
         assert_eq!(effect, Effect::SaveSession);
+    }
+
+    #[test]
+    fn test_switch_model_updates_fields() {
+        let mut app = test_app();
+
+        let effect = update(
+            &mut app,
+            Action::SwitchModel {
+                name: "gpt-4".to_string(),
+                provider: "openrouter".to_string(),
+            },
+        );
+
+        assert_eq!(app.model_name, "gpt-4");
+        assert_eq!(app.provider_name, "openrouter");
+        assert!(app.status_message.contains("gpt-4"));
+        assert_eq!(effect, Effect::RebuildProvider);
     }
 
     #[test]
