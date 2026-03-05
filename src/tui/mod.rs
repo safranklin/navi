@@ -251,17 +251,19 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
                 if let Some(picker_event) = mp.handle_event(&event) {
                     match picker_event {
                         ModelPickerEvent::Select(entry) => {
-                            // Build a new resolved config with the selected model/provider
-                            let mut new_config = config.clone();
-                            new_config.provider = entry.provider.clone();
-                            new_config.model_name = entry.name.clone();
-
-                            // Rebuild the provider for the new model
-                            app.provider = build_provider(&new_config);
-                            app.model_name = entry.name.clone();
-                            app.provider_name = entry.provider.clone();
-                            app.status_message =
-                                format!("Switched to {} ({})", entry.name, entry.provider);
+                            let effect = update(
+                                &mut app,
+                                Action::SwitchModel {
+                                    name: entry.name.clone(),
+                                    provider: entry.provider.clone(),
+                                },
+                            );
+                            if effect == Effect::RebuildProvider {
+                                let mut new_config = config.clone();
+                                new_config.provider = entry.provider.clone();
+                                new_config.model_name = entry.name.clone();
+                                app.provider = build_provider(&new_config);
+                            }
                             info!("Model switched: {} ({})", entry.name, entry.provider);
                             tui.model_picker = None;
                         }
@@ -553,6 +555,9 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
                 }
                 Effect::SaveSession => {
                     session::save_current_session(&mut app);
+                }
+                Effect::RebuildProvider => {
+                    warn!("Unexpected RebuildProvider from background action");
                 }
                 _ => {}
             }
