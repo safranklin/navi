@@ -250,7 +250,7 @@ pub fn load_index() -> io::Result<SessionIndex> {
 /// Skips empty sessions (no user/model messages). This is the single entry
 /// point for session persistence — call from the TUI on SaveSession effect or quit.
 pub fn save_current_session(app: &mut App) {
-    let has_messages = app.context.items.iter().any(|item| {
+    let has_messages = app.session.context.items.iter().any(|item| {
         matches!(item, ContextItem::Message(seg) if matches!(seg.source, Source::User | Source::Model))
     });
     if !has_messages {
@@ -258,11 +258,12 @@ pub fn save_current_session(app: &mut App) {
     }
 
     // Generate title if not yet assigned (e.g. dismissed session manager on startup)
-    if app.session_title.is_empty() {
-        app.session_title = format!("Session #{}", next_session_number());
+    if app.session.session_title.is_empty() {
+        app.session.session_title = format!("Session #{}", next_session_number());
     }
 
     let id = app
+        .session
         .current_session_id
         .get_or_insert_with(new_session_id)
         .clone();
@@ -272,9 +273,9 @@ pub fn save_current_session(app: &mut App) {
 
     if let Err(e) = save_session(
         &id,
-        &app.context.items,
+        &app.session.context.items,
         &app.model_name,
-        &app.session_title,
+        &app.session.session_title,
         existing_meta.as_ref(),
     ) {
         warn!("Failed to save session: {}", e);

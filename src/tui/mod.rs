@@ -189,7 +189,7 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
         tui.input_box.dimmed = matches!(tui.input_mode, InputMode::Cursor);
 
         // Determine if animations are running (landing page or loading spinner)
-        let animating = app.is_loading || !app.context.has_visible_messages();
+        let animating = app.session.is_loading || !app.session.context.has_visible_messages();
 
         if animating {
             needs_redraw = true;
@@ -296,7 +296,7 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
                                 }
                                 Err(e) => {
                                     warn!("Failed to load session {}: {}", id, e);
-                                    app.status_message = format!("Load failed: {}", e);
+                                    app.session.status_message = format!("Load failed: {}", e);
                                 }
                             }
                             tui.session_manager = None;
@@ -372,7 +372,7 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
 
                 if let Some(idx) = hit {
                     tui.message_list.selected_index = Some(idx);
-                    if matches!(app.context.items.get(idx), Some(ContextItem::ToolCall(_)))
+                    if matches!(app.session.context.items.get(idx), Some(ContextItem::ToolCall(_)))
                         && !tui.message_list.expanded_indices.remove(&idx)
                     {
                         tui.message_list.expanded_indices.insert(idx);
@@ -397,7 +397,7 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
             match tui.input_mode {
                 InputMode::Input => {
                     // Esc while loading → cancel generation
-                    if matches!(event, TuiEvent::Escape) && app.is_loading {
+                    if matches!(event, TuiEvent::Escape) && app.session.is_loading {
                         for handle in active_abort_handles.drain(..) {
                             handle.abort();
                         }
@@ -411,7 +411,7 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
                     if matches!(event, TuiEvent::Escape) {
                         tui.input_mode = InputMode::Cursor;
                         // Select the last non-ToolResult item when entering Cursor mode
-                        let items = &app.context.items;
+                        let items = &app.session.context.items;
                         let mut idx = items.len();
                         while idx > 0 {
                             idx -= 1;
@@ -428,7 +428,7 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
                     if let Some(input_event) = tui.input_box.handle_event(&event) {
                         match input_event {
                             InputEvent::Submit(text) => {
-                                if !app.is_loading {
+                                if !app.session.is_loading {
                                     let effect = update(&mut app, Action::Submit(text));
                                     if effect == Effect::SpawnRequest {
                                         active_abort_handles = spawn_request(&app, tx.clone());
@@ -448,7 +448,7 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
                 InputMode::Cursor => {
                     match event {
                         // Esc while loading → cancel generation
-                        TuiEvent::Escape if app.is_loading => {
+                        TuiEvent::Escape if app.session.is_loading => {
                             for handle in active_abort_handles.drain(..) {
                                 handle.abort();
                             }
@@ -463,7 +463,7 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
                         TuiEvent::InputChar(' ') => {
                             if let Some(idx) = tui.message_list.selected_index
                                 && matches!(
-                                    app.context.items.get(idx),
+                                    app.session.context.items.get(idx),
                                     Some(ContextItem::ToolCall(_))
                                 )
                                 && !tui.message_list.expanded_indices.remove(&idx)
@@ -484,7 +484,7 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
                         }
                         // Up/Down navigate messages (skipping consumed ToolResults)
                         TuiEvent::CursorUp => {
-                            let items = &app.context.items;
+                            let items = &app.session.context.items;
                             if !items.is_empty() {
                                 let mut idx = tui
                                     .message_list
@@ -500,7 +500,7 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
                             }
                         }
                         TuiEvent::CursorDown => {
-                            let items = &app.context.items;
+                            let items = &app.session.context.items;
                             if let Some(mut idx) = tui.message_list.selected_index
                                 && idx + 1 < items.len()
                             {
@@ -625,7 +625,7 @@ fn spawn_request(app: &App, tx: mpsc::Sender<Action>) -> Vec<tokio::task::AbortH
 
     // Clone what we need for the async task
     let provider = app.provider.clone();
-    let context = app.context.clone();
+    let context = app.session.context.clone();
     let model = app.model_name.clone();
     let effort = app.effort;
     let tools = app.tool_definitions();
