@@ -52,8 +52,12 @@ pub enum Action {
     SwitchModel { name: String, provider: String },
     // Replace context with a loaded session
     LoadSession(SessionData),
-    // Reset to a fresh conversation
-    NewSession,
+    // Reset to a fresh conversation with the given title
+    NewSession { title: String },
+    // Session was renamed on disk — update domain state if it's the active session
+    SessionRenamed { id: String, new_title: String },
+    // Session was deleted on disk — clear active session if it matches
+    SessionDeleted(String),
     // Dynamic models fetched from provider APIs (handled by TUI, not core)
     ModelsFetched(Vec<ModelEntry>),
 }
@@ -241,10 +245,10 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
             app_state.status_message = format!("Loaded: {}", data.meta.title);
             Effect::Render
         }
-        Action::NewSession => {
+        Action::NewSession { title } => {
             app_state.context = Context::with_system_prompt(app_state.system_prompt.clone());
             app_state.current_session_id = None;
-            app_state.session_title = String::new();
+            app_state.session_title = title;
             app_state.is_loading = false;
             app_state.pending_tool_calls.clear();
             app_state.stream_done = false;
@@ -255,6 +259,18 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
             app_state.session_total_tokens = 0;
             app_state.error = None;
             app_state.status_message = String::from("New session.");
+            Effect::Render
+        }
+        Action::SessionRenamed { id, new_title } => {
+            if app_state.current_session_id.as_deref() == Some(&id) {
+                app_state.session_title = new_title;
+            }
+            Effect::Render
+        }
+        Action::SessionDeleted(id) => {
+            if app_state.current_session_id.as_deref() == Some(&id) {
+                app_state.current_session_id = None;
+            }
             Effect::Render
         }
         Action::SwitchModel { name, provider } => {
@@ -554,6 +570,80 @@ mod tests {
         assert!(app.status_message.contains("30 out"));
         assert!(app.status_message.contains("TTFT 250ms"));
         assert_eq!(effect, Effect::SaveSession);
+    }
+
+    #[test]
+    fn test_new_session_sets_title() {
+        let mut app = test_app();
+        app.context.add_user_message("hello".to_string());
+        app.current_session_id = Some("old-id".to_string());
+
+        let effect = update(
+            &mut app,
+            Action::NewSession {
+                title: "Session #5".to_string(),
+            },
+        );
+
+        assert_eq!(app.session_title, "Session #5");
+        assert!(app.current_session_id.is_none());
+        assert_eq!(effect, Effect::Render);
+    }
+
+    #[test]
+    fn test_session_renamed_updates_active_title() {
+        let mut app = test_app();
+        app.current_session_id = Some("sess-1".to_string());
+        app.session_title = "Old Title".to_string();
+
+        let effect = update(
+            &mut app,
+            Action::SessionRenamed {
+                id: "sess-1".to_string(),
+                new_title: "New Title".to_string(),
+            },
+        );
+
+        assert_eq!(app.session_title, "New Title");
+        assert_eq!(effect, Effect::Render);
+    }
+
+    #[test]
+    fn test_session_renamed_ignores_different_session() {
+        let mut app = test_app();
+        app.current_session_id = Some("sess-1".to_string());
+        app.session_title = "My Session".to_string();
+
+        update(
+            &mut app,
+            Action::SessionRenamed {
+                id: "sess-other".to_string(),
+                new_title: "Other Title".to_string(),
+            },
+        );
+
+        assert_eq!(app.session_title, "My Session");
+    }
+
+    #[test]
+    fn test_session_deleted_clears_active_session() {
+        let mut app = test_app();
+        app.current_session_id = Some("sess-1".to_string());
+
+        let effect = update(&mut app, Action::SessionDeleted("sess-1".to_string()));
+
+        assert!(app.current_session_id.is_none());
+        assert_eq!(effect, Effect::Render);
+    }
+
+    #[test]
+    fn test_session_deleted_ignores_different_session() {
+        let mut app = test_app();
+        app.current_session_id = Some("sess-1".to_string());
+
+        update(&mut app, Action::SessionDeleted("sess-other".to_string()));
+
+        assert_eq!(app.current_session_id.as_deref(), Some("sess-1"));
     }
 
     #[test]
