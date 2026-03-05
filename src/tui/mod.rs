@@ -296,13 +296,13 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
                             tui.session_manager = None;
                         }
                         SessionEvent::CreateNew => {
-                            let effect = update(&mut app, Action::NewSession);
+                            let title =
+                                format!("Session #{}", session::next_session_number());
+                            let effect =
+                                update(&mut app, Action::NewSession { title });
                             if effect == Effect::Quit {
                                 should_quit = true;
                             }
-                            // Assign "Session #N" title immediately
-                            app.session_title =
-                                format!("Session #{}", session::next_session_number());
                             tui.message_list = MessageListState::new();
                             tui.session_manager = None;
                         }
@@ -310,9 +310,10 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
                             if let Err(e) = session::rename_session(&id, &new_title) {
                                 warn!("Failed to rename session {}: {}", id, e);
                             }
-                            // Update active session title if renaming the current one
-                            if app.current_session_id.as_deref() == Some(&id) {
-                                app.session_title = new_title;
+                            let effect =
+                                update(&mut app, Action::SessionRenamed { id, new_title });
+                            if effect == Effect::Quit {
+                                should_quit = true;
                             }
                         }
                         SessionEvent::Delete(id) => {
@@ -320,9 +321,9 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
                                 warn!("Failed to delete session {}: {}", id, e);
                             }
                             sm.remove_session(&id);
-                            // If we deleted the active session, clear the ID
-                            if app.current_session_id.as_deref() == Some(&id) {
-                                app.current_session_id = None;
+                            let effect = update(&mut app, Action::SessionDeleted(id));
+                            if effect == Effect::Quit {
+                                should_quit = true;
                             }
                         }
                         SessionEvent::Dismiss => {
