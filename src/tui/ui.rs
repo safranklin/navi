@@ -1,3 +1,13 @@
+//! # UI Layout & Rendering
+//!
+//! Top-level `draw_ui` function that composes all components into a frame.
+//!
+//! **Layout:** title bar (1 line) + main area (flex) + input box (3-7 lines).
+//!
+//! **Rendering order:** Main area renders first so `MessageList::render` can
+//! update the layout cache before `hit_test_message` needs it. Then title bar,
+//! input box, and finally overlays (session manager, model picker) on top.
+
 use crate::core::state::App;
 use crate::tui::TuiState;
 use crate::tui::component::Component;

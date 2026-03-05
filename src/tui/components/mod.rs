@@ -11,12 +11,17 @@
 //! Simple display components that receive all data as parameters:
 //! - `TitleBar`: Top status bar showing model name and status
 //! - `Message`: Individual conversation message rendering
+//! - `LandingPage`: Welcome screen when no messages exist
+//! - `Logo`: ASCII art logo rendering
+//! - `ToolMessage`: Tool call/result display
 //!
 //! ### Stateful Components (Event-Driven)
 //!
 //! Components that manage local state and emit events:
 //! - `InputBox`: Text input field with effort level indicator
 //! - `MessageList`: Scrollable conversation view with layout caching
+//! - `SessionManager`: Session list overlay with create/rename/delete
+//! - `ModelPicker`: Fuzzy-search model selection overlay
 //!
 //! ## Design Philosophy
 //!
@@ -57,26 +62,20 @@
 //!
 //! ```text
 //! components/
-//! ├── mod.rs           (this file)
-//! ├── title_bar.rs     (Top status bar)
-//! ├── message.rs       (Single message renderer)
-//! ├── message_list.rs  (Scrollable message container)
-//! └── input_box/       (Text input with effort indicator)
+//! ├── mod.rs            (this file)
+//! ├── title_bar.rs      (Top status bar)
+//! ├── message.rs        (Single message renderer)
+//! ├── message_list.rs   (Scrollable message container)
+//! ├── input_box/        (Text input with effort indicator)
+//! ├── tool_message.rs   (Tool call/result display)
+//! ├── landing.rs        (Welcome/landing page)
+//! ├── logo.rs           (ASCII art logo)
+//! ├── session_manager.rs(Session list overlay)
+//! └── model_picker.rs   (Model selection overlay)
 //! ```
-//!
-//! ## Migration Status
-//!
-//! Components will be migrated from the monolithic `ui.rs` module incrementally:
-//!
-//! - [ ] Phase 1: Infrastructure (component.rs, this file)
-//! - [ ] Phase 2: TitleBar, Message (stateless)
-//! - [ ] Phase 3: InputBox, MessageList (stateful)
-//! - [ ] Phase 4: Integration (wire up in main loop)
-//! - [ ] Phase 5: Cleanup (remove old code from ui.rs)
 
 // Re-export components
 mod title_bar;
-#[allow(unused_imports)] // Used in Phase 4 (integration with main loop)
 pub use title_bar::TitleBar;
 
 pub mod input_box;
