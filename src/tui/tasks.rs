@@ -6,6 +6,7 @@ use std::sync::{Arc, mpsc};
 use crate::core::action::Action;
 use crate::core::state::App;
 use crate::inference::{CompletionRequest, StreamChunk, model_discovery};
+use crate::tui::stream_buffer::{BufferableChunk, ChunkKind, SmoothedChunk, StreamBuffer};
 
 pub fn spawn_tool_execution(
     tool_call: crate::inference::ToolCall,
@@ -88,92 +89,112 @@ pub fn spawn_request(app: &App, tx: mpsc::Sender<Action>) -> Vec<tokio::task::Ab
         }
     });
 
-    // Spawn a task to forward chunks to the Action channel
+    // Spawn a task to forward chunks to the Action channel via a smoothing buffer
     let forward_handle = tokio::spawn(async move {
+        let mut buffer = StreamBuffer::new(2, 10); // content: 2 chars/tick, thinking: 20 chars/tick
+        let mut ticker = tokio::time::interval(std::time::Duration::from_millis(16)); // 60fps cadence, ~125 c/s content
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
         let mut forwarded_count = 0usize;
         let mut total_content_len = 0usize;
+        let mut stream_ended = false;
+        let mut got_completed = false;
+        let mut completed_stats: Option<crate::inference::UsageStats> = None;
 
         // Client-side timing
         let request_start = std::time::Instant::now();
         let mut first_content_time: Option<std::time::Instant> = None;
 
-        while let Some(chunk) = chunk_rx.recv().await {
-            forwarded_count += 1;
-            match chunk {
-                StreamChunk::Content { text, item_id } => {
-                    if first_content_time.is_none() {
-                        first_content_time = Some(std::time::Instant::now());
-                    }
-                    total_content_len += text.len();
-                    debug!(
-                        "Forwarding Action::ResponseChunk (len={}, total={})",
-                        text.len(),
-                        total_content_len
-                    );
-                    if tx.send(Action::ResponseChunk { text, item_id }).is_err() {
-                        warn!("Failed to forward ResponseChunk: receiver dropped");
-                        return;
+        loop {
+            tokio::select! {
+                chunk = chunk_rx.recv(), if !stream_ended => {
+                    match chunk {
+                        Some(chunk @ (StreamChunk::Content { .. } | StreamChunk::Thinking { .. })) => {
+                            let (text, item_id, kind) = match chunk {
+                                StreamChunk::Content { text, item_id } => {
+                                    total_content_len += text.len();
+                                    (text, item_id, ChunkKind::Content)
+                                }
+                                StreamChunk::Thinking { text, item_id } => {
+                                    (text, item_id, ChunkKind::Thinking)
+                                }
+                                _ => unreachable!(),
+                            };
+                            if first_content_time.is_none() {
+                                first_content_time = Some(std::time::Instant::now());
+                            }
+                            forwarded_count += 1;
+                            buffer.push(BufferableChunk { kind, item_id, text });
+                        }
+                        Some(StreamChunk::ToolCall(tc)) => {
+                            // Flush buffered text before passing through tool calls
+                            if flush_and_send(&mut buffer, &tx, true) {
+                                return;
+                            }
+                            debug!("Forwarding ToolCall: {} (call_id={})", tc.name, tc.call_id);
+                            if tx.send(Action::ToolCallReceived(tc)).is_err() {
+                                warn!("Failed to forward ToolCall: receiver dropped");
+                                return;
+                            }
+                        }
+                        Some(StreamChunk::Completed(provider_stats)) => {
+                            got_completed = true;
+                            completed_stats = provider_stats;
+                            stream_ended = true;
+                        }
+                        None => {
+                            // Channel closed without Completed
+                            stream_ended = true;
+                        }
                     }
                 }
-                StreamChunk::Thinking { text, item_id } => {
-                    if first_content_time.is_none() {
-                        first_content_time = Some(std::time::Instant::now());
-                    }
-                    debug!("Forwarding Action::ThinkingChunk (len={})", text.len());
-                    if tx.send(Action::ThinkingChunk { text, item_id }).is_err() {
-                        warn!("Failed to forward ThinkingChunk: receiver dropped");
+                _ = ticker.tick() => {
+                    if flush_and_send(&mut buffer, &tx, false) {
                         return;
                     }
-                }
-                StreamChunk::ToolCall(tc) => {
-                    debug!("Forwarding ToolCall: {} (call_id={})", tc.name, tc.call_id);
-                    if tx.send(Action::ToolCallReceived(tc)).is_err() {
-                        warn!("Failed to forward ToolCall: receiver dropped");
+
+                    if stream_ended && buffer.is_empty() {
+                        // Build and send final stats
+                        if got_completed {
+                            let duration_ms = request_start.elapsed().as_millis() as u64;
+                            let ttft_ms = first_content_time
+                                .map(|t| (t - request_start).as_millis() as u64);
+
+                            let mut stats = completed_stats.take().unwrap_or_default();
+                            stats.ttft_ms = ttft_ms;
+                            stats.generation_duration_ms = Some(duration_ms);
+                            if let Some(output_tokens) = stats.output_tokens
+                                && duration_ms > 0
+                            {
+                                stats.tokens_per_sec = Some(
+                                    output_tokens as f32 / (duration_ms as f32 / 1000.0),
+                                );
+                            }
+
+                            debug!(
+                                "Stream completed: ttft={}ms, duration={}ms, tok/s={:?}",
+                                ttft_ms.unwrap_or(0), duration_ms, stats.tokens_per_sec
+                            );
+                            info!(
+                                "Forwarding complete: {} actions, {} content bytes",
+                                forwarded_count, total_content_len
+                            );
+                            if tx.send(Action::ResponseDone(Some(stats))).is_err() {
+                                warn!("Failed to send ResponseDone: receiver dropped");
+                            }
+                        } else {
+                            info!(
+                                "Stream channel closed: {} actions, {} content bytes",
+                                forwarded_count, total_content_len
+                            );
+                            if tx.send(Action::ResponseDone(None)).is_err() {
+                                warn!("Failed to send ResponseDone: receiver dropped");
+                            }
+                        }
                         return;
                     }
-                }
-                StreamChunk::Completed(provider_stats) => {
-                    let duration_ms = request_start.elapsed().as_millis() as u64;
-                    let ttft_ms =
-                        first_content_time.map(|t| (t - request_start).as_millis() as u64);
-
-                    // Enrich provider stats with client-side timing
-                    let mut stats = provider_stats.unwrap_or_default();
-                    stats.ttft_ms = ttft_ms;
-                    stats.generation_duration_ms = Some(duration_ms);
-                    if let Some(output_tokens) = stats.output_tokens
-                        && duration_ms > 0
-                    {
-                        stats.tokens_per_sec =
-                            Some(output_tokens as f32 / (duration_ms as f32 / 1000.0));
-                    }
-
-                    debug!(
-                        "Stream completed: ttft={}ms, duration={}ms, tok/s={:?}",
-                        ttft_ms.unwrap_or(0),
-                        duration_ms,
-                        stats.tokens_per_sec
-                    );
-
-                    info!(
-                        "Forwarding complete: {} actions, {} content bytes",
-                        forwarded_count, total_content_len
-                    );
-                    if tx.send(Action::ResponseDone(Some(stats))).is_err() {
-                        warn!("Failed to send ResponseDone: receiver dropped");
-                    }
-                    return;
                 }
             }
-        }
-
-        // Fallback: channel closed without a Completed event
-        info!(
-            "Stream channel closed: {} actions, {} content bytes",
-            forwarded_count, total_content_len
-        );
-        if tx.send(Action::ResponseDone(None)).is_err() {
-            warn!("Failed to send ResponseDone: receiver dropped");
         }
     });
 
@@ -227,4 +248,32 @@ pub fn spawn_model_fetch(app: &App, tx: mpsc::Sender<Action>) {
             warn!("Failed to send ModelsFetched: receiver dropped");
         }
     });
+}
+
+/// Flush the stream buffer and send resulting Actions. If `all` is true, uses flush_all.
+/// Returns true if the receiver has been dropped (caller should return).
+fn flush_and_send(buffer: &mut StreamBuffer, tx: &mpsc::Sender<Action>, all: bool) -> bool {
+    let chunks: Vec<SmoothedChunk> = if all {
+        buffer.flush_all()
+    } else {
+        buffer.flush()
+    };
+
+    for chunk in chunks {
+        let action = match chunk.kind {
+            ChunkKind::Content => Action::ResponseChunk {
+                text: chunk.text,
+                item_id: chunk.item_id,
+            },
+            ChunkKind::Thinking => Action::ThinkingChunk {
+                text: chunk.text,
+                item_id: chunk.item_id,
+            },
+        };
+        if tx.send(action).is_err() {
+            warn!("Failed to send buffered chunk: receiver dropped");
+            return true;
+        }
+    }
+    false
 }

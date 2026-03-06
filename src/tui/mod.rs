@@ -24,6 +24,7 @@ mod components;
 mod event;
 mod handlers;
 pub mod markdown;
+mod stream_buffer;
 mod tasks;
 mod ui;
 
