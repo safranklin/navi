@@ -131,9 +131,7 @@ mod tests {
     fn render(width: u16, bar: &mut TitleBar) -> String {
         let backend = TestBackend::new(width, 1);
         let mut terminal = Terminal::new(backend).unwrap();
-        terminal
-            .draw(|f| bar.render(f, f.area()))
-            .unwrap();
+        terminal.draw(|f| bar.render(f, f.area())).unwrap();
         terminal
             .backend()
             .buffer()

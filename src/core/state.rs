@@ -16,9 +16,9 @@
 //! State changes only happen through `update(state, action)` in action.rs.
 //! This keeps things predictable, so no surprise mutations.
 
-use crate::core::config::{ModelEntry, ResolvedConfig};
 #[cfg(test)]
 use crate::core::config::{self, DEFAULT_MAX_AGENTIC_ROUNDS, DEFAULT_MAX_OUTPUT_TOKENS};
+use crate::core::config::{ModelEntry, ResolvedConfig};
 use crate::core::tools::ToolRegistry;
 use crate::inference::{CompletionProvider, Context, Effort, ToolDefinition, UsageStats};
 use std::collections::{HashMap, HashSet};

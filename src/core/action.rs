@@ -49,13 +49,21 @@ pub enum Action {
     // Cycle to next reasoning effort level
     CycleEffort,
     // Switch to a different model/provider
-    SwitchModel { name: String, provider: String },
+    SwitchModel {
+        name: String,
+        provider: String,
+    },
     // Replace context with a loaded session
     LoadSession(SessionData),
     // Reset to a fresh conversation with the given title
-    NewSession { title: String },
+    NewSession {
+        title: String,
+    },
     // Session was renamed on disk — update domain state if it's the active session
-    SessionRenamed { id: String, new_title: String },
+    SessionRenamed {
+        id: String,
+        new_title: String,
+    },
     // Session was deleted on disk — clear active session if it matches
     SessionDeleted(String),
     // Dynamic models fetched from provider APIs (handled by TUI, not core)
@@ -68,9 +76,9 @@ pub enum Effect {
     Render,
     Quit,
     SpawnRequest,
-    ExecuteTool(ToolCall),  // Run a tool asynchronously
-    SaveSession,            // Persist current session to disk
-    RebuildProvider,        // Reconstruct the provider after model switch
+    ExecuteTool(ToolCall), // Run a tool asynchronously
+    SaveSession,           // Persist current session to disk
+    RebuildProvider,       // Reconstruct the provider after model switch
 }
 
 /// Checks whether the current agentic round is fully complete (stream finished
@@ -110,10 +118,7 @@ fn check_round_complete(app_state: &mut App) -> Effect {
             Effect::SaveSession
         }
     } else if !s.pending_tool_calls.is_empty() {
-        s.status_message = format!(
-            "Waiting for {} more tool(s)...",
-            s.pending_tool_calls.len()
-        );
+        s.status_message = format!("Waiting for {} more tool(s)...", s.pending_tool_calls.len());
         Effect::Render
     } else {
         // Stream not done yet, or tools still pending — keep waiting

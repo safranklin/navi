@@ -205,7 +205,8 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
         }
 
         // Handle background task actions (streaming responses)
-        let (quit, had_actions) = handlers::process_background_actions(&rx, &mut app, &mut tui, &tx);
+        let (quit, had_actions) =
+            handlers::process_background_actions(&rx, &mut app, &mut tui, &tx);
         if had_actions {
             needs_redraw = true;
         }
