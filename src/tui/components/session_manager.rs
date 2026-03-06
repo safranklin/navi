@@ -60,10 +60,7 @@ impl SessionManagerState {
                         let id = self.sessions[self.selected].id.clone();
                         self.sessions[self.selected].title = new_title.clone();
                         self.rename = None;
-                        return Some(SessionEvent::Rename {
-                            id,
-                            new_title,
-                        });
+                        return Some(SessionEvent::Rename { id, new_title });
                     }
                     self.rename = None;
                 }
@@ -94,7 +91,10 @@ impl SessionManagerState {
                 }
                 TuiEvent::CursorRight => {
                     if rs.cursor < rs.buffer.len() {
-                        rs.cursor += rs.buffer[rs.cursor..].chars().next().map_or(0, |c| c.len_utf8());
+                        rs.cursor += rs.buffer[rs.cursor..]
+                            .chars()
+                            .next()
+                            .map_or(0, |c| c.len_utf8());
                     }
                 }
                 _ => {}
@@ -255,9 +255,7 @@ impl<'a> SessionManager<'a> {
                     let cursor_in_title = rs.cursor.min(title_width);
                     let cursor_x = overlay.x + 2 + date.len() as u16 + 2 + cursor_in_title as u16;
                     // overlay.y + 1(border) + row index (relative to list scroll)
-                    let visible_row = i.saturating_sub(
-                        self.state.list_state.offset(),
-                    );
+                    let visible_row = i.saturating_sub(self.state.list_state.offset());
                     let cursor_y = overlay.y + 1 + visible_row as u16;
                     rename_cursor_pos = Some((cursor_x, cursor_y));
 
