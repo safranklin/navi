@@ -10,7 +10,8 @@
 //! ├── effort: Effort                         // reasoning effort level
 //! ├── registry: Arc<ToolRegistry>            // tool registry
 //! ├── model: ActiveModel                     // model name + provider
-//! └── ... config-driven fields ...
+//! ├── config: ResolvedConfig                 // connection details (URLs, keys)
+//! └── ... mutable overrides ...
 //! ```
 //!
 //! State changes only happen through `update(state, action)` in action.rs.
@@ -89,37 +90,34 @@ pub struct App {
     pub model: ActiveModel,
 
     // --- Config-driven fields ---
+    pub config: ResolvedConfig,
     pub max_agentic_rounds: u8,
     pub max_output_tokens: u32,
     pub system_prompt: String,
     pub available_models: Vec<ModelEntry>,
-    pub openrouter_api_key: Option<String>,
-    pub openrouter_base_url: String,
-    pub lmstudio_base_url: String,
 }
 
 impl App {
     /// Creates an App with default settings. Used by tests via `test_app()`.
     #[cfg(test)]
     pub fn new(provider: Arc<dyn CompletionProvider>, model_name: String) -> Self {
+        let resolved = config::resolve(&config::NaviConfig::default(), None);
         Self {
             provider,
             session: SessionState::new(config::DEFAULT_SYSTEM_PROMPT),
             model: ActiveModel::new(model_name, ""),
             effort: Effort::default(),
             registry: Arc::new(crate::core::tools::default_registry()),
+            config: resolved,
             max_agentic_rounds: DEFAULT_MAX_AGENTIC_ROUNDS,
             max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
             system_prompt: config::DEFAULT_SYSTEM_PROMPT.to_string(),
             available_models: Vec::new(),
-            openrouter_api_key: None,
-            openrouter_base_url: config::DEFAULT_OPENROUTER_BASE_URL.to_string(),
-            lmstudio_base_url: config::DEFAULT_LMSTUDIO_BASE_URL.to_string(),
         }
     }
 
     /// Creates an App from resolved config values.
-    pub fn from_config(provider: Arc<dyn CompletionProvider>, config: &ResolvedConfig) -> Self {
+    pub fn from_config(provider: Arc<dyn CompletionProvider>, config: ResolvedConfig) -> Self {
         Self {
             provider,
             session: SessionState::new(&config.system_prompt),
@@ -130,9 +128,7 @@ impl App {
             max_output_tokens: config.max_output_tokens,
             system_prompt: config.system_prompt.clone(),
             available_models: config.models.clone(),
-            openrouter_api_key: config.openrouter_api_key.clone(),
-            openrouter_base_url: config.openrouter_base_url.clone(),
-            lmstudio_base_url: config.lmstudio_base_url.clone(),
+            config,
         }
     }
 

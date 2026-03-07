@@ -6,7 +6,6 @@ use std::sync::mpsc;
 use ratatui::layout::Rect;
 
 use crate::core::action::{Action, Effect, update};
-use crate::core::config::ResolvedConfig;
 use crate::core::session;
 use crate::core::state::{ActiveModel, App};
 use crate::inference::ContextItem;
@@ -22,7 +21,6 @@ pub fn handle_event(
     event: TuiEvent,
     app: &mut App,
     tui: &mut TuiState,
-    config: &ResolvedConfig,
     tx: &mpsc::Sender<Action>,
     frame_area: Rect,
 ) -> bool {
@@ -50,11 +48,11 @@ pub fn handle_event(
     }
 
     if tui.model_picker.is_some() {
-        return handle_model_picker_event(&event, app, tui, config);
+        return handle_model_picker_event(&event, app, tui);
     }
 
     if tui.session_manager.is_some() {
-        return handle_session_event(&event, app, tui, config);
+        return handle_session_event(&event, app, tui);
     }
 
     if let TuiEvent::MouseMove(_col, row) = event {
@@ -118,8 +116,8 @@ pub fn process_background_actions(
             Effect::SaveSession => {
                 session::save_current_session(app);
             }
-            Effect::RebuildProvider => {
-                warn!("Unexpected RebuildProvider from background action");
+            Effect::SwitchProvider => {
+                warn!("Unexpected SwitchProvider from background action");
             }
             _ => {}
         }
@@ -295,12 +293,7 @@ fn handle_mouse_click(row: u16, app: &App, tui: &mut TuiState, frame_area: Rect)
     }
 }
 
-fn handle_session_event(
-    event: &TuiEvent,
-    app: &mut App,
-    tui: &mut TuiState,
-    config: &ResolvedConfig,
-) -> bool {
+fn handle_session_event(event: &TuiEvent, app: &mut App, tui: &mut TuiState) -> bool {
     let sm = tui.session_manager.as_mut().unwrap();
     if let Some(session_event) = sm.handle_event(event) {
         match session_event {
@@ -308,8 +301,8 @@ fn handle_session_event(
                 match session::load_session(&id) {
                     Ok(data) => {
                         let effect = update(app, Action::LoadSession(data));
-                        if effect == Effect::RebuildProvider {
-                            rebuild_provider(app, config);
+                        if effect == Effect::SwitchProvider {
+                            switch_provider(app);
                         }
                         if effect == Effect::Quit {
                             tui.session_manager = None;
@@ -364,27 +357,22 @@ fn handle_session_event(
     false
 }
 
-fn rebuild_provider(app: &mut App, config: &ResolvedConfig) {
-    let mut new_config = config.clone();
-    new_config.provider = app.model.provider.clone();
-    new_config.model_name = app.model.name.clone();
-    app.provider = crate::inference::build_provider(&new_config);
+fn switch_provider(app: &mut App) {
+    let mut build_config = app.config.clone();
+    build_config.provider = app.model.provider.clone();
+    build_config.model_name = app.model.name.clone();
+    app.provider = crate::inference::build_provider(&build_config);
 }
 
-fn handle_model_picker_event(
-    event: &TuiEvent,
-    app: &mut App,
-    tui: &mut TuiState,
-    config: &ResolvedConfig,
-) -> bool {
+fn handle_model_picker_event(event: &TuiEvent, app: &mut App, tui: &mut TuiState) -> bool {
     let mp = tui.model_picker.as_mut().unwrap();
     if let Some(picker_event) = mp.handle_event(event) {
         match picker_event {
             ModelPickerEvent::Select(entry) => {
                 let model = ActiveModel::new(entry.name.clone(), entry.provider.clone());
                 let effect = update(app, Action::SwitchModel(model));
-                if effect == Effect::RebuildProvider {
-                    rebuild_provider(app, config);
+                if effect == Effect::SwitchProvider {
+                    switch_provider(app);
                 }
                 info!("Model switched: {} ({})", entry.name, entry.provider);
                 tui.model_picker = None;
@@ -400,30 +388,12 @@ fn handle_model_picker_event(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::config::{
-        DEFAULT_LMSTUDIO_BASE_URL, DEFAULT_MAX_AGENTIC_ROUNDS, DEFAULT_MAX_OUTPUT_TOKENS,
-        DEFAULT_OPENROUTER_BASE_URL, DEFAULT_SYSTEM_PROMPT, ModelEntry,
-    };
+    use crate::core::config::ModelEntry;
     use crate::inference::{ContextItem, ContextSegment, Effort, Source, ToolResult};
     use crate::test_support::test_app;
 
     fn test_tui_state() -> TuiState {
         TuiState::new(Effort::default())
-    }
-
-    fn test_config() -> ResolvedConfig {
-        ResolvedConfig {
-            provider: "openrouter".to_string(),
-            model_name: "test-model".to_string(),
-            max_agentic_rounds: DEFAULT_MAX_AGENTIC_ROUNDS,
-            max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
-            effort: Effort::default(),
-            system_prompt: DEFAULT_SYSTEM_PROMPT.to_string(),
-            openrouter_api_key: None,
-            openrouter_base_url: DEFAULT_OPENROUTER_BASE_URL.to_string(),
-            lmstudio_base_url: DEFAULT_LMSTUDIO_BASE_URL.to_string(),
-            models: Vec::new(),
-        }
     }
 
     fn test_frame_area() -> Rect {
@@ -436,14 +406,12 @@ mod tests {
     fn test_resize_is_noop() {
         let mut app = test_app();
         let mut tui = test_tui_state();
-        let config = test_config();
         let (tx, _rx) = mpsc::channel();
 
         let quit = handle_event(
             TuiEvent::Resize,
             &mut app,
             &mut tui,
-            &config,
             &tx,
             test_frame_area(),
         );
@@ -455,14 +423,12 @@ mod tests {
     fn test_force_quit_returns_true() {
         let mut app = test_app();
         let mut tui = test_tui_state();
-        let config = test_config();
         let (tx, _rx) = mpsc::channel();
 
         let quit = handle_event(
             TuiEvent::ForceQuit,
             &mut app,
             &mut tui,
-            &config,
             &tx,
             test_frame_area(),
         );
@@ -479,14 +445,12 @@ mod tests {
             provider: "openrouter".to_string(),
             description: None,
         }]);
-        let config = test_config();
         let (tx, _rx) = mpsc::channel();
 
         let quit = handle_event(
             TuiEvent::OpenModelPicker,
             &mut app,
             &mut tui,
-            &config,
             &tx,
             test_frame_area(),
         );
@@ -500,14 +464,12 @@ mod tests {
         let mut app = test_app();
         let mut tui = test_tui_state();
         tui.model_picker = Some(ModelPickerState::new(vec![]));
-        let config = test_config();
         let (tx, _rx) = mpsc::channel();
 
         let quit = handle_event(
             TuiEvent::Escape,
             &mut app,
             &mut tui,
-            &config,
             &tx,
             test_frame_area(),
         );
@@ -520,7 +482,6 @@ mod tests {
     fn test_scroll_events_dont_quit() {
         let mut app = test_app();
         let mut tui = test_tui_state();
-        let config = test_config();
         let (tx, _rx) = mpsc::channel();
 
         for event in [
@@ -529,7 +490,7 @@ mod tests {
             TuiEvent::ScrollPageUp,
             TuiEvent::ScrollPageDown,
         ] {
-            let quit = handle_event(event, &mut app, &mut tui, &config, &tx, test_frame_area());
+            let quit = handle_event(event, &mut app, &mut tui, &tx, test_frame_area());
             assert!(!quit);
         }
     }
@@ -549,14 +510,12 @@ mod tests {
                 source: Source::User,
                 content: "hello".to_string(),
             }));
-        let config = test_config();
         let (tx, _rx) = mpsc::channel();
 
         handle_event(
             TuiEvent::Escape,
             &mut app,
             &mut tui,
-            &config,
             &tx,
             test_frame_area(),
         );
@@ -594,14 +553,12 @@ mod tests {
                 source: Source::Model,
                 content: "response".to_string(),
             }));
-        let config = test_config();
         let (tx, _rx) = mpsc::channel();
 
         handle_event(
             TuiEvent::Escape,
             &mut app,
             &mut tui,
-            &config,
             &tx,
             test_frame_area(),
         );
@@ -615,14 +572,12 @@ mod tests {
         let mut tui = test_tui_state();
         tui.input_mode = InputMode::Cursor;
         tui.message_list.selected_index = Some(0);
-        let config = test_config();
         let (tx, _rx) = mpsc::channel();
 
         handle_event(
             TuiEvent::InputChar('a'),
             &mut app,
             &mut tui,
-            &config,
             &tx,
             test_frame_area(),
         );
@@ -637,14 +592,12 @@ mod tests {
         let mut tui = test_tui_state();
         tui.input_mode = InputMode::Cursor;
         tui.message_list.selected_index = Some(0);
-        let config = test_config();
         let (tx, _rx) = mpsc::channel();
 
         handle_event(
             TuiEvent::Submit,
             &mut app,
             &mut tui,
-            &config,
             &tx,
             test_frame_area(),
         );
@@ -668,14 +621,12 @@ mod tests {
             }
         });
         tui.active_abort_handles.push(handle.abort_handle());
-        let config = test_config();
         let (tx, _rx) = mpsc::channel();
 
         let quit = handle_event(
             TuiEvent::Escape,
             &mut app,
             &mut tui,
-            &config,
             &tx,
             test_frame_area(),
         );
@@ -703,14 +654,12 @@ mod tests {
                 }));
         }
         tui.message_list.selected_index = Some(3); // last item
-        let config = test_config();
         let (tx, _rx) = mpsc::channel();
 
         handle_event(
             TuiEvent::CursorUp,
             &mut app,
             &mut tui,
-            &config,
             &tx,
             test_frame_area(),
         );
@@ -746,14 +695,12 @@ mod tests {
                 content: "response".to_string(),
             }));
         tui.message_list.selected_index = Some(3);
-        let config = test_config();
         let (tx, _rx) = mpsc::channel();
 
         handle_event(
             TuiEvent::CursorUp,
             &mut app,
             &mut tui,
-            &config,
             &tx,
             test_frame_area(),
         );
@@ -790,14 +737,12 @@ mod tests {
                 content: "response".to_string(),
             }));
         tui.message_list.selected_index = Some(1);
-        let config = test_config();
         let (tx, _rx) = mpsc::channel();
 
         handle_event(
             TuiEvent::CursorDown,
             &mut app,
             &mut tui,
-            &config,
             &tx,
             test_frame_area(),
         );
@@ -819,14 +764,12 @@ mod tests {
                 content: "hello".to_string(),
             }));
         tui.message_list.selected_index = None;
-        let config = test_config();
         let (tx, _rx) = mpsc::channel();
 
         handle_event(
             TuiEvent::CursorUp,
             &mut app,
             &mut tui,
-            &config,
             &tx,
             test_frame_area(),
         );
@@ -848,14 +791,12 @@ mod tests {
                 content: "hello".to_string(),
             }));
         tui.message_list.selected_index = Some(1); // last item
-        let config = test_config();
         let (tx, _rx) = mpsc::channel();
 
         handle_event(
             TuiEvent::CursorDown,
             &mut app,
             &mut tui,
-            &config,
             &tx,
             test_frame_area(),
         );

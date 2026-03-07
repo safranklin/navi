@@ -207,9 +207,9 @@ pub fn spawn_request(app: &App, tx: mpsc::Sender<Action>) -> Vec<tokio::task::Ab
 /// LM Studio has a 3s timeout so it won't block if the server isn't running.
 /// Results are deduped against pinned models in `ModelPickerState::set_fetched_models()`.
 pub fn spawn_model_fetch(app: &App, tx: mpsc::Sender<Action>) {
-    let openrouter_base_url = app.openrouter_base_url.clone();
-    let openrouter_api_key = app.openrouter_api_key.clone();
-    let lmstudio_base_url = app.lmstudio_base_url.clone();
+    let openrouter_base_url = app.config.openrouter_base_url.clone();
+    let openrouter_api_key = app.config.openrouter_api_key.clone();
+    let lmstudio_base_url = app.config.lmstudio_base_url.clone();
 
     tokio::spawn(async move {
         let (or_result, lms_result) = tokio::join!(

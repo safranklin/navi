@@ -75,7 +75,7 @@ pub enum Effect {
     SpawnRequest,
     ExecuteTool(ToolCall), // Run a tool asynchronously
     SaveSession,           // Persist current session to disk
-    RebuildProvider,       // Reconstruct the provider after model switch
+    SwitchProvider,       // Reconstruct the provider after model switch
 }
 
 /// Checks whether the current agentic round is fully complete (stream finished
@@ -250,7 +250,7 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
             }
             app_state.session = session;
             if provider_changed {
-                Effect::RebuildProvider
+                Effect::SwitchProvider
             } else {
                 Effect::Render
             }
@@ -278,7 +278,7 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
             app_state.session.status_message =
                 format!("Switched to {} ({})", model.name, model.provider);
             app_state.model = model;
-            Effect::RebuildProvider
+            Effect::SwitchProvider
         }
         Action::CycleEffort => {
             app_state.effort = app_state.effort.next();
@@ -673,7 +673,7 @@ mod tests {
         assert_eq!(app.model.name, "gpt-4");
         assert_eq!(app.model.provider, "openrouter");
         assert!(app.session.status_message.contains("gpt-4"));
-        assert_eq!(effect, Effect::RebuildProvider);
+        assert_eq!(effect, Effect::SwitchProvider);
     }
 
     fn make_session_data(model_name: &str, provider_name: &str) -> crate::core::session::SessionData {
@@ -705,7 +705,7 @@ mod tests {
 
         assert_eq!(app.model.name, "saved-model");
         assert_eq!(app.model.provider, "lmstudio");
-        assert_eq!(effect, Effect::RebuildProvider);
+        assert_eq!(effect, Effect::SwitchProvider);
     }
 
     #[test]

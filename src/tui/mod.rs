@@ -137,7 +137,7 @@ impl Drop for TerminalModeGuard {
 
 pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
     let provider = crate::inference::build_provider(&config);
-    let mut app = App::from_config(provider, &config);
+    let mut app = App::from_config(provider, config);
     let mut tui = TuiState::new(app.effort);
 
     // Open session manager on startup so user picks a session (or starts new)
@@ -196,7 +196,7 @@ pub fn run(config: ResolvedConfig) -> std::io::Result<()> {
             .into_iter()
             .chain(std::iter::from_fn(poll_event_immediate))
         {
-            if handlers::handle_event(event, &mut app, &mut tui, &config, &tx, frame_area) {
+            if handlers::handle_event(event, &mut app, &mut tui, &tx, frame_area) {
                 should_quit = true;
             }
         }
