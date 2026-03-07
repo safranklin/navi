@@ -52,7 +52,7 @@
 //! **Example:**
 //! ```rust,ignore
 //! // Good: Dependencies are explicit
-//! title_bar.render(frame, area, &app.model_name, &app.status_message);
+//! title_bar.render(frame, area, &app.model.name, &app.status_message);
 //!
 //! // Bad: Hidden dependency on global state
 //! title_bar.render(frame, area); // reads from global App

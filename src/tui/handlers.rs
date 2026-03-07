@@ -8,7 +8,7 @@ use ratatui::layout::Rect;
 use crate::core::action::{Action, Effect, update};
 use crate::core::config::ResolvedConfig;
 use crate::core::session;
-use crate::core::state::App;
+use crate::core::state::{ActiveModel, App};
 use crate::inference::ContextItem;
 use crate::tui::component::EventHandler;
 use crate::tui::components::model_picker::ModelPickerEvent;
@@ -54,7 +54,7 @@ pub fn handle_event(
     }
 
     if tui.session_manager.is_some() {
-        return handle_session_event(&event, app, tui);
+        return handle_session_event(&event, app, tui, config);
     }
 
     if let TuiEvent::MouseMove(_col, row) = event {
@@ -295,7 +295,12 @@ fn handle_mouse_click(row: u16, app: &App, tui: &mut TuiState, frame_area: Rect)
     }
 }
 
-fn handle_session_event(event: &TuiEvent, app: &mut App, tui: &mut TuiState) -> bool {
+fn handle_session_event(
+    event: &TuiEvent,
+    app: &mut App,
+    tui: &mut TuiState,
+    config: &ResolvedConfig,
+) -> bool {
     let sm = tui.session_manager.as_mut().unwrap();
     if let Some(session_event) = sm.handle_event(event) {
         match session_event {
@@ -303,6 +308,9 @@ fn handle_session_event(event: &TuiEvent, app: &mut App, tui: &mut TuiState) -> 
                 match session::load_session(&id) {
                     Ok(data) => {
                         let effect = update(app, Action::LoadSession(data));
+                        if effect == Effect::RebuildProvider {
+                            rebuild_provider(app, config);
+                        }
                         if effect == Effect::Quit {
                             tui.session_manager = None;
                             return true;
@@ -356,6 +364,13 @@ fn handle_session_event(event: &TuiEvent, app: &mut App, tui: &mut TuiState) -> 
     false
 }
 
+fn rebuild_provider(app: &mut App, config: &ResolvedConfig) {
+    let mut new_config = config.clone();
+    new_config.provider = app.model.provider.clone();
+    new_config.model_name = app.model.name.clone();
+    app.provider = crate::inference::build_provider(&new_config);
+}
+
 fn handle_model_picker_event(
     event: &TuiEvent,
     app: &mut App,
@@ -366,18 +381,10 @@ fn handle_model_picker_event(
     if let Some(picker_event) = mp.handle_event(event) {
         match picker_event {
             ModelPickerEvent::Select(entry) => {
-                let effect = update(
-                    app,
-                    Action::SwitchModel {
-                        name: entry.name.clone(),
-                        provider: entry.provider.clone(),
-                    },
-                );
+                let model = ActiveModel::new(entry.name.clone(), entry.provider.clone());
+                let effect = update(app, Action::SwitchModel(model));
                 if effect == Effect::RebuildProvider {
-                    let mut new_config = config.clone();
-                    new_config.provider = entry.provider.clone();
-                    new_config.model_name = entry.name.clone();
-                    app.provider = crate::inference::build_provider(&new_config);
+                    rebuild_provider(app, config);
                 }
                 info!("Model switched: {} ({})", entry.name, entry.provider);
                 tui.model_picker = None;

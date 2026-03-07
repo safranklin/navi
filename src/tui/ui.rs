@@ -52,8 +52,8 @@ pub fn draw_ui(frame: &mut Frame, app: &App, tui: &mut TuiState, spinner_frame: 
 
     // 2. Render TitleBar
     let mut title_bar = TitleBar::new(
-        &app.model_name,
-        &app.provider_name,
+        &app.model.name,
+        &app.model.provider,
         app.session.is_loading,
         spinner_frame,
         &app.session.session_title,
@@ -72,7 +72,7 @@ pub fn draw_ui(frame: &mut Frame, app: &App, tui: &mut TuiState, spinner_frame: 
 
     // 5. Model picker overlay (on top of everything, including session manager)
     if let Some(ref mut mp) = tui.model_picker {
-        ModelPicker::new(mp, &app.model_name).render(frame, frame.area());
+        ModelPicker::new(mp, &app.model.name).render(frame, frame.area());
     }
 }
 

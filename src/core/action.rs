@@ -15,7 +15,7 @@
 
 use crate::core::config::ModelEntry;
 use crate::core::session::SessionData;
-use crate::core::state::{App, SessionState};
+use crate::core::state::{ActiveModel, App, SessionState};
 use crate::inference::{ToolCall, ToolResult, UsageStats};
 use log::{debug, warn};
 
@@ -49,10 +49,7 @@ pub enum Action {
     // Cycle to next reasoning effort level
     CycleEffort,
     // Switch to a different model/provider
-    SwitchModel {
-        name: String,
-        provider: String,
-    },
+    SwitchModel(ActiveModel),
     // Replace context with a loaded session
     LoadSession(SessionData),
     // Reset to a fresh conversation with the given title
@@ -236,16 +233,27 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
         }
         Action::LoadSession(data) => {
             let mut session = SessionState::new(&app_state.system_prompt);
-            // Rebuild context with system directive, then push loaded items
             for item in data.items {
                 session.context.items.push(item);
             }
             session.current_session_id = Some(data.meta.id);
             session.session_title = data.meta.title.clone();
             session.status_message = format!("Loaded: {}", data.meta.title);
-            app_state.model_name = data.meta.model_name;
+            let loaded_model = ActiveModel::new(data.meta.model_name, data.meta.provider_name);
+            let provider_changed =
+                !loaded_model.provider.is_empty() && loaded_model.provider != app_state.model.provider;
+            if !loaded_model.provider.is_empty() {
+                app_state.model = loaded_model;
+            } else {
+                // Legacy session without provider - update name only
+                app_state.model.name = loaded_model.name;
+            }
             app_state.session = session;
-            Effect::Render
+            if provider_changed {
+                Effect::RebuildProvider
+            } else {
+                Effect::Render
+            }
         }
         Action::NewSession { title } => {
             app_state.session = SessionState::new(&app_state.system_prompt);
@@ -266,10 +274,10 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
             }
             Effect::Render
         }
-        Action::SwitchModel { name, provider } => {
-            app_state.session.status_message = format!("Switched to {} ({})", name, provider);
-            app_state.model_name = name;
-            app_state.provider_name = provider;
+        Action::SwitchModel(model) => {
+            app_state.session.status_message =
+                format!("Switched to {} ({})", model.name, model.provider);
+            app_state.model = model;
             Effect::RebuildProvider
         }
         Action::CycleEffort => {
@@ -659,16 +667,72 @@ mod tests {
 
         let effect = update(
             &mut app,
-            Action::SwitchModel {
-                name: "gpt-4".to_string(),
-                provider: "openrouter".to_string(),
-            },
+            Action::SwitchModel(ActiveModel::new("gpt-4", "openrouter")),
         );
 
-        assert_eq!(app.model_name, "gpt-4");
-        assert_eq!(app.provider_name, "openrouter");
+        assert_eq!(app.model.name, "gpt-4");
+        assert_eq!(app.model.provider, "openrouter");
         assert!(app.session.status_message.contains("gpt-4"));
         assert_eq!(effect, Effect::RebuildProvider);
+    }
+
+    fn make_session_data(model_name: &str, provider_name: &str) -> crate::core::session::SessionData {
+        use crate::core::session::{SessionData, SessionMeta};
+        SessionData {
+            meta: SessionMeta {
+                id: "sess-1".to_string(),
+                title: "Test Session".to_string(),
+                created_at: 0,
+                updated_at: 0,
+                message_count: 1,
+                model_name: model_name.to_string(),
+                provider_name: provider_name.to_string(),
+            },
+            items: vec![ContextItem::Message(crate::inference::ContextSegment {
+                source: Source::User,
+                content: "hello".to_string(),
+            })],
+        }
+    }
+
+    #[test]
+    fn test_load_session_restores_model_and_provider() {
+        let mut app = test_app();
+        app.model = ActiveModel::new("old-model", "openrouter");
+
+        let data = make_session_data("saved-model", "lmstudio");
+        let effect = update(&mut app, Action::LoadSession(data));
+
+        assert_eq!(app.model.name, "saved-model");
+        assert_eq!(app.model.provider, "lmstudio");
+        assert_eq!(effect, Effect::RebuildProvider);
+    }
+
+    #[test]
+    fn test_load_session_same_provider_returns_render() {
+        let mut app = test_app();
+        app.model = ActiveModel::new("old-model", "openrouter");
+
+        let data = make_session_data("new-model", "openrouter");
+        let effect = update(&mut app, Action::LoadSession(data));
+
+        assert_eq!(app.model.name, "new-model");
+        assert_eq!(app.model.provider, "openrouter");
+        assert_eq!(effect, Effect::Render);
+    }
+
+    #[test]
+    fn test_load_session_legacy_without_provider() {
+        let mut app = test_app();
+        app.model = ActiveModel::new("old-model", "openrouter");
+
+        // Legacy session: provider_name is empty
+        let data = make_session_data("legacy-model", "");
+        let effect = update(&mut app, Action::LoadSession(data));
+
+        assert_eq!(app.model.name, "legacy-model");
+        assert_eq!(app.model.provider, "openrouter"); // preserved
+        assert_eq!(effect, Effect::Render);
     }
 
     #[test]

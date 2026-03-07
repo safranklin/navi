@@ -16,7 +16,7 @@ use chrono::Utc;
 use log::{debug, warn};
 use serde::{Deserialize, Serialize};
 
-use crate::core::state::App;
+use crate::core::state::{ActiveModel, App};
 use crate::inference::{ContextItem, Source};
 
 /// Summary metadata for a session (stored in the index file).
@@ -28,6 +28,8 @@ pub struct SessionMeta {
     pub updated_at: i64,
     pub message_count: usize,
     pub model_name: String,
+    #[serde(default)]
+    pub provider_name: String,
 }
 
 /// Full session data: metadata + conversation items.
@@ -159,7 +161,7 @@ fn atomic_write_json<T: Serialize>(path: &Path, data: &T) -> io::Result<()> {
 pub fn save_session(
     id: &str,
     items: &[ContextItem],
-    model_name: &str,
+    model: &ActiveModel,
     title: &str,
     existing_meta: Option<&SessionMeta>,
 ) -> io::Result<()> {
@@ -180,7 +182,8 @@ pub fn save_session(
         created_at: existing_meta.map(|m| m.created_at).unwrap_or(now),
         updated_at: now,
         message_count,
-        model_name: model_name.to_string(),
+        model_name: model.name.clone(),
+        provider_name: model.provider.clone(),
     };
 
     let data = SessionData {
@@ -274,7 +277,7 @@ pub fn save_current_session(app: &mut App) {
     if let Err(e) = save_session(
         &id,
         &app.session.context.items,
-        &app.model_name,
+        &app.model,
         &app.session.session_title,
         existing_meta.as_ref(),
     ) {

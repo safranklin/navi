@@ -54,7 +54,7 @@ pub fn spawn_request(app: &App, tx: mpsc::Sender<Action>) -> Vec<tokio::task::Ab
     // Clone what we need for the async task
     let provider = app.provider.clone();
     let context = app.session.context.clone();
-    let model = app.model_name.clone();
+    let model = app.model.name.clone();
     let effort = app.effort;
     let tools = app.tool_definitions();
     let max_output_tokens = Some(app.max_output_tokens);

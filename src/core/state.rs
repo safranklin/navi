@@ -9,7 +9,7 @@
 //! ├── session: SessionState                  // per-conversation state
 //! ├── effort: Effort                         // reasoning effort level
 //! ├── registry: Arc<ToolRegistry>            // tool registry
-//! ├── provider_name: String                  // active provider name
+//! ├── model: ActiveModel                     // model name + provider
 //! └── ... config-driven fields ...
 //! ```
 //!
@@ -23,6 +23,23 @@ use crate::core::tools::ToolRegistry;
 use crate::inference::{CompletionProvider, Context, Effort, ToolDefinition, UsageStats};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+
+/// The currently-selected model and provider. These two must stay in sync -
+/// a model name alone is ambiguous across providers.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ActiveModel {
+    pub name: String,
+    pub provider: String,
+}
+
+impl ActiveModel {
+    pub fn new(name: impl Into<String>, provider: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            provider: provider.into(),
+        }
+    }
+}
 
 /// Per-session state that gets fully replaced on NewSession / LoadSession.
 ///
@@ -69,9 +86,7 @@ pub struct App {
     pub session: SessionState,
     pub effort: Effort,
     pub registry: Arc<ToolRegistry>,
-    pub model_name: String,
-    /// Provider name for the active model (e.g. "openrouter", "lmstudio").
-    pub provider_name: String,
+    pub model: ActiveModel,
 
     // --- Config-driven fields ---
     pub max_agentic_rounds: u8,
@@ -90,10 +105,9 @@ impl App {
         Self {
             provider,
             session: SessionState::new(config::DEFAULT_SYSTEM_PROMPT),
-            model_name,
+            model: ActiveModel::new(model_name, ""),
             effort: Effort::default(),
             registry: Arc::new(crate::core::tools::default_registry()),
-            provider_name: String::new(),
             max_agentic_rounds: DEFAULT_MAX_AGENTIC_ROUNDS,
             max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
             system_prompt: config::DEFAULT_SYSTEM_PROMPT.to_string(),
@@ -109,10 +123,9 @@ impl App {
         Self {
             provider,
             session: SessionState::new(&config.system_prompt),
-            model_name: config.model_name.clone(),
+            model: ActiveModel::new(config.model_name.clone(), config.provider.clone()),
             effort: config.effort,
             registry: Arc::new(crate::core::tools::default_registry()),
-            provider_name: config.provider.clone(),
             max_agentic_rounds: config.max_agentic_rounds,
             max_output_tokens: config.max_output_tokens,
             system_prompt: config.system_prompt.clone(),
@@ -137,6 +150,6 @@ mod tests {
         let app = test_app();
         assert_eq!(app.session.status_message, "Welcome to Navi!");
         assert!(!app.session.is_loading);
-        assert_eq!(app.model_name, "test-model");
+        assert_eq!(app.model.name, "test-model");
     }
 }
