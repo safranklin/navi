@@ -43,10 +43,10 @@ pub struct BashOutput {
 impl Tool for BashTool {
     const NAME: &'static str = "bash";
     const DESCRIPTION: &'static str = "\
-        Executes a bash command and returns its stdout, stderr, and exit code. \
-        Use this tool to run shell commands, inspect files, check system state, \
-        compile code, run tests, or perform any operation available via the command line. \
-        Commands run in the project's working directory.";
+        Executes a shell command and returns stdout, stderr, exit code, and a truncated flag. \
+        Commands run in the project's working directory with a 120-second timeout. \
+        Output is capped at 100KB per stream; if exceeded, the truncated field is true. \
+        Prefer concise commands and pipe to head/tail when output may be large.";
     const PERMISSION: ToolPermission = ToolPermission::Prompt;
 
     type Args = BashArgs;

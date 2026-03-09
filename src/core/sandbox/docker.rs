@@ -107,7 +107,7 @@ impl Sandbox for DockerSandbox {
 
         let exec_future = async {
             let output = tokio::process::Command::new("docker")
-                .args(["exec", container_id, "sh", "-c", command])
+                .args(["exec", container_id, "bash", "-c", command])
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())
                 .output()
