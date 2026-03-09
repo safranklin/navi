@@ -68,13 +68,13 @@ pub const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 16384;
 pub const DEFAULT_OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
 pub const DEFAULT_LMSTUDIO_BASE_URL: &str = "http://localhost:1234/v1";
 
-pub const DEFAULT_SYSTEM_PROMPT: &str = "You are a helpful assistant. \
-    TOOL USE IS MANDATORY: if a registered tool can perform a computation, lookup, or action, you MUST call it. \
-    NEVER perform arithmetic, math, or calculations yourself — always delegate to the appropriate tool. \
-    When independent sub-expressions can be computed simultaneously, call multiple tools in parallel. \
-    When a result depends on a previous tool's output, wait for that result before proceeding. \
-    Your text responses should only interpret and present tool results, never substitute for them. \
-    Be direct, be honest about uncertainty, and prefer clarity over hedging.";
+pub const DEFAULT_SYSTEM_PROMPT: &str = "You are a helpful assistant.\n\n\
+    TOOL USE: When a registered tool can fulfill a request - whether computation, file access, \
+    or any other action - you MUST use it instead of attempting the task yourself. \
+    Never perform arithmetic or math yourself; always delegate to the appropriate tool.\n\n\
+    PARALLEL CALLS: When independent operations can run simultaneously, call multiple tools in parallel. \
+    When a result depends on a previous tool's output, wait for that result before proceeding.\n\n\
+    RESPONSES: Interpret and present tool results directly. Be concise, direct, and honest about uncertainty.";
 
 // ============================================================================
 // Resolved Config (concrete values, no Options)
