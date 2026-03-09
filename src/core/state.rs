@@ -21,8 +21,8 @@
 use crate::core::config::{self, DEFAULT_MAX_AGENTIC_ROUNDS, DEFAULT_MAX_OUTPUT_TOKENS};
 use crate::core::config::{ModelEntry, ResolvedConfig};
 use crate::core::tools::ToolRegistry;
-use crate::inference::{CompletionProvider, Context, Effort, ToolDefinition, UsageStats};
-use std::collections::{HashMap, HashSet};
+use crate::inference::{CompletionProvider, Context, Effort, ToolCall, ToolDefinition, UsageStats};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 /// The currently-selected model and provider. These two must stay in sync -
@@ -60,6 +60,8 @@ pub struct SessionState {
     pub session_total_tokens: u32,
     pub error: Option<String>,
     pub status_message: String,
+    /// Tools awaiting user approval before execution.
+    pub approval_queue: VecDeque<ToolCall>,
 }
 
 impl SessionState {
@@ -78,6 +80,7 @@ impl SessionState {
             session_total_tokens: 0,
             error: None,
             status_message: String::from("Welcome to Navi!"),
+            approval_queue: VecDeque::new(),
         }
     }
 }

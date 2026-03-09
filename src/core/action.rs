@@ -16,6 +16,7 @@
 use crate::core::config::ModelEntry;
 use crate::core::session::SessionData;
 use crate::core::state::{ActiveModel, App, SessionState};
+use crate::core::tools::ToolPermission;
 use crate::inference::{ToolCall, ToolResult, UsageStats};
 use log::{debug, warn};
 
@@ -61,8 +62,12 @@ pub enum Action {
         id: String,
         new_title: String,
     },
-    // Session was deleted on disk — clear active session if it matches
+    // Session was deleted on disk - clear active session if it matches
     SessionDeleted(String),
+    // User approved a tool in the approval queue
+    ToolApproved(String),
+    // User denied a tool in the approval queue
+    ToolDenied(String),
     // Dynamic models fetched from provider APIs (handled by TUI, not core)
     ModelsFetched(Vec<ModelEntry>),
 }
@@ -74,8 +79,9 @@ pub enum Effect {
     Quit,
     SpawnRequest,
     ExecuteTool(ToolCall), // Run a tool asynchronously
+    PromptToolApproval,    // Show tool approval modal to the user
     SaveSession,           // Persist current session to disk
-    SwitchProvider,       // Reconstruct the provider after model switch
+    SwitchProvider,        // Reconstruct the provider after model switch
 }
 
 /// Checks whether the current agentic round is fully complete (stream finished
@@ -209,8 +215,24 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
             s.had_tool_calls = true;
             s.pending_tool_calls.insert(tool_call.call_id.clone());
             s.context.add_tool_call(tool_call.clone());
-            s.status_message = format!("Calling: {}...", tool_call.name);
-            Effect::ExecuteTool(tool_call)
+
+            // Check permission: Safe tools execute immediately, Prompt tools queue for approval
+            let permission = app_state
+                .registry
+                .permission(&tool_call.name)
+                .unwrap_or(ToolPermission::Prompt);
+
+            match permission {
+                ToolPermission::Safe => {
+                    s.status_message = format!("Calling: {}...", tool_call.name);
+                    Effect::ExecuteTool(tool_call)
+                }
+                ToolPermission::Prompt => {
+                    s.status_message = format!("Approval needed: {}", tool_call.name);
+                    s.approval_queue.push_back(tool_call);
+                    Effect::PromptToolApproval
+                }
+            }
         }
         Action::ToolResultReady { call_id, output } => {
             app_state.session.pending_tool_calls.remove(&call_id);
@@ -224,6 +246,7 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
             let s = &mut app_state.session;
             s.is_loading = false;
             s.pending_tool_calls.clear();
+            s.approval_queue.clear();
             s.stream_done = false;
             s.had_tool_calls = false;
             s.usage_stats = UsageStats::default();
@@ -285,6 +308,32 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
             app_state.session.status_message = format!("Reasoning: {}", app_state.effort.label());
             Effect::Render
         }
+        Action::ToolApproved(call_id) => {
+            let s = &mut app_state.session;
+            if let Some(pos) = s.approval_queue.iter().position(|tc| tc.call_id == call_id) {
+                let tool_call = s.approval_queue.remove(pos).unwrap();
+                s.status_message = format!("Calling: {}...", tool_call.name);
+                Effect::ExecuteTool(tool_call)
+            } else {
+                warn!("ToolApproved for unknown call_id: {}", call_id);
+                Effect::Render
+            }
+        }
+        Action::ToolDenied(call_id) => {
+            let s = &mut app_state.session;
+            if let Some(pos) = s.approval_queue.iter().position(|tc| tc.call_id == call_id) {
+                let tool_call = s.approval_queue.remove(pos).unwrap();
+                s.pending_tool_calls.remove(&call_id);
+                s.context.add_tool_result(ToolResult {
+                    call_id: call_id.clone(),
+                    output: serde_json::json!({"error": format!("Tool '{}' was denied by the user.", tool_call.name)}).to_string(),
+                });
+                check_round_complete(app_state)
+            } else {
+                warn!("ToolDenied for unknown call_id: {}", call_id);
+                Effect::Render
+            }
+        }
         // ModelsFetched carries TUI-only state (picker list). The TUI event loop
         // intercepts this action before it reaches update(). This no-op handler
         // exists as a defensive fallthrough — if the TUI intercept is ever removed,
@@ -297,7 +346,7 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
 mod tests {
     use super::*;
     use crate::inference::{ContextItem, Effort, Source};
-    use crate::test_support::test_app;
+    use crate::test_support::{test_app, test_app_with_prompt_tool};
 
     #[test]
     fn test_quit_returns_quit_effect() {
@@ -381,13 +430,13 @@ mod tests {
     fn test_tool_call_received_returns_execute_effect() {
         let mut app = test_app();
         app.session.is_loading = true;
-        let tc = make_tool_call("get_weather", "call_1");
+        let tc = make_tool_call("math_operation", "call_1");
 
         let effect = update(&mut app, Action::ToolCallReceived(tc.clone()));
 
         assert!(app.session.pending_tool_calls.contains("call_1"));
         assert!(matches!(effect, Effect::ExecuteTool(ref t) if t.call_id == "call_1"));
-        assert!(app.session.status_message.contains("get_weather"));
+        assert!(app.session.status_message.contains("math_operation"));
     }
 
     #[test]
@@ -501,8 +550,8 @@ mod tests {
         let mut app = test_app();
         app.session.is_loading = true;
 
-        // Stream sends first tool call
-        let tc1 = make_tool_call("add", "call_1");
+        // Stream sends first tool call (use registered safe tool names)
+        let tc1 = make_tool_call("math_operation", "call_1");
         let effect = update(&mut app, Action::ToolCallReceived(tc1));
         assert!(matches!(effect, Effect::ExecuteTool(_)));
         assert!(app.session.had_tool_calls);
@@ -515,12 +564,12 @@ mod tests {
                 output: r#"{"result": 3}"#.to_string(),
             },
         );
-        // Should NOT fire SpawnRequest — stream_done is still false
+        // Should NOT fire SpawnRequest - stream_done is still false
         assert_eq!(effect, Effect::Render);
         assert!(app.session.is_loading);
 
         // Stream sends second tool call
-        let tc2 = make_tool_call("subtract", "call_2");
+        let tc2 = make_tool_call("read_file", "call_2");
         let effect = update(&mut app, Action::ToolCallReceived(tc2));
         assert!(matches!(effect, Effect::ExecuteTool(_)));
 
@@ -765,7 +814,7 @@ mod tests {
         app.session.is_loading = true;
 
         // Round 1: tool-calling round
-        let tc = make_tool_call("add", "call_1");
+        let tc = make_tool_call("math_operation", "call_1");
         update(&mut app, Action::ToolCallReceived(tc));
 
         let round1_stats = UsageStats {
@@ -805,5 +854,109 @@ mod tests {
         assert_eq!(app.session.usage_stats.generation_duration_ms, Some(2000));
         // Status should show the summary
         assert!(app.session.status_message.contains("250 in"));
+    }
+
+    // --- Permission system tests ---
+
+    #[test]
+    fn test_safe_tool_executes_immediately() {
+        let mut app = test_app_with_prompt_tool();
+        app.session.is_loading = true;
+        let tc = make_tool_call("math_operation", "call_1");
+
+        let effect = update(&mut app, Action::ToolCallReceived(tc));
+
+        assert!(matches!(effect, Effect::ExecuteTool(ref t) if t.call_id == "call_1"));
+        assert!(app.session.approval_queue.is_empty());
+    }
+
+    #[test]
+    fn test_prompt_tool_queues_for_approval() {
+        let mut app = test_app_with_prompt_tool();
+        app.session.is_loading = true;
+        let tc = make_tool_call("stub_prompt", "call_1");
+
+        let effect = update(&mut app, Action::ToolCallReceived(tc));
+
+        assert_eq!(effect, Effect::PromptToolApproval);
+        assert_eq!(app.session.approval_queue.len(), 1);
+        assert_eq!(app.session.approval_queue[0].call_id, "call_1");
+        assert!(app.session.pending_tool_calls.contains("call_1"));
+    }
+
+    #[test]
+    fn test_tool_approved_returns_execute_effect() {
+        let mut app = test_app_with_prompt_tool();
+        app.session.is_loading = true;
+        let tc = make_tool_call("stub_prompt", "call_1");
+        update(&mut app, Action::ToolCallReceived(tc));
+
+        let effect = update(&mut app, Action::ToolApproved("call_1".to_string()));
+
+        assert!(matches!(effect, Effect::ExecuteTool(ref t) if t.call_id == "call_1"));
+        assert!(app.session.approval_queue.is_empty());
+    }
+
+    #[test]
+    fn test_tool_denied_synthesizes_error_result() {
+        let mut app = test_app_with_prompt_tool();
+        app.session.is_loading = true;
+        app.session.stream_done = true;
+        let tc = make_tool_call("stub_prompt", "call_1");
+        update(&mut app, Action::ToolCallReceived(tc));
+
+        let effect = update(&mut app, Action::ToolDenied("call_1".to_string()));
+
+        assert!(app.session.approval_queue.is_empty());
+        assert!(!app.session.pending_tool_calls.contains("call_1"));
+
+        let has_error_result = app.session.context.items.iter().any(|item| {
+            matches!(item, ContextItem::ToolResult(tr) if tr.call_id == "call_1" && tr.output.contains("denied"))
+        });
+        assert!(has_error_result);
+
+        // Stream done + no pending = should trigger round check
+        assert_eq!(effect, Effect::SpawnRequest);
+    }
+
+    #[test]
+    fn test_multiple_prompt_tools_queue_correctly() {
+        let mut app = test_app_with_prompt_tool();
+        app.session.is_loading = true;
+
+        let tc1 = make_tool_call("stub_prompt", "call_1");
+        let tc2 = make_tool_call("stub_prompt", "call_2");
+
+        update(&mut app, Action::ToolCallReceived(tc1));
+        update(&mut app, Action::ToolCallReceived(tc2));
+
+        assert_eq!(app.session.approval_queue.len(), 2);
+        assert_eq!(app.session.pending_tool_calls.len(), 2);
+    }
+
+    #[test]
+    fn test_denied_tool_triggers_round_check() {
+        let mut app = test_app_with_prompt_tool();
+        app.session.is_loading = true;
+        app.session.had_tool_calls = true;
+        app.session.stream_done = true;
+
+        let tc = make_tool_call("stub_prompt", "call_1");
+        update(&mut app, Action::ToolCallReceived(tc));
+        let effect = update(&mut app, Action::ToolDenied("call_1".to_string()));
+
+        assert_eq!(effect, Effect::SpawnRequest);
+    }
+
+    #[test]
+    fn test_unknown_tool_defaults_to_prompt() {
+        let mut app = test_app_with_prompt_tool();
+        app.session.is_loading = true;
+        let tc = make_tool_call("nonexistent_tool", "call_1");
+
+        let effect = update(&mut app, Action::ToolCallReceived(tc));
+
+        assert_eq!(effect, Effect::PromptToolApproval);
+        assert_eq!(app.session.approval_queue.len(), 1);
     }
 }
