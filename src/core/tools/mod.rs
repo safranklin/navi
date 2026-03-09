@@ -7,7 +7,8 @@
 //! `DynTool` is the object-safe bridge trait that enables dynamic dispatch despite
 //! `Tool` having associated types. A blanket impl converts any `T: Tool` into `dyn DynTool`.
 
-pub mod arithmetic;
+pub mod math;
+pub mod io;
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -118,10 +119,8 @@ impl ToolRegistry {
 /// Creates a registry with all built-in tools.
 pub fn default_registry() -> ToolRegistry {
     let mut registry = ToolRegistry::new();
-    registry.register(arithmetic::AddTool);
-    registry.register(arithmetic::SubtractTool);
-    registry.register(arithmetic::MultiplyTool);
-    registry.register(arithmetic::DivideTool);
+    registry.register(math::MathOperation);
+    registry.register(io::ReadFileTool);
     registry
 }
 
@@ -130,13 +129,6 @@ pub fn default_registry() -> ToolRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arithmetic::{AddArgs, AddTool};
-
-    #[tokio::test]
-    async fn test_add_tool_direct() {
-        let result = AddTool.call(AddArgs { a: 3.0, b: 7.0 }).await.unwrap();
-        assert_eq!(result.result, 10.0);
-    }
 
     #[tokio::test]
     async fn test_registry_execute() {
@@ -144,8 +136,8 @@ mod tests {
         let tc = ToolCall {
             id: "fc_1".into(),
             call_id: "call_1".into(),
-            name: "add".into(),
-            arguments: r#"{"a": 3, "b": 7}"#.into(),
+            name: "math_operation".into(),
+            arguments: r#"{"operation": "add", "a": 3, "b": 7}"#.into(),
         };
         let result = registry.execute(&tc).await;
         assert_eq!(result, r#"{"result":10.0}"#);
@@ -157,7 +149,7 @@ mod tests {
         let tc = ToolCall {
             id: "fc_2".into(),
             call_id: "call_2".into(),
-            name: "add".into(),
+            name: "math_operation".into(),
             arguments: r#"{"a": "not a number"}"#.into(),
         };
         let result = registry.execute(&tc).await;
@@ -178,23 +170,28 @@ mod tests {
     }
 
     #[test]
-    fn test_definitions_include_add() {
+    fn test_definitions_lists_all_tools() {
         let registry = default_registry();
         let defs = registry.definitions();
-        assert_eq!(defs.len(), 4);
-        assert_eq!(defs[0].name, "add");
+        assert_eq!(defs.len(), 2);
+        let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
+        assert!(names.contains(&"math_operation"));
+        assert!(names.contains(&"read_file"));
     }
 
     #[test]
-    fn test_schema_has_properties_and_required() {
+    fn test_math_schema_has_properties_and_required() {
         let registry = default_registry();
         let defs = registry.definitions();
-        let params = &defs[0].parameters;
+        let math_def = defs.iter().find(|d| d.name == "math_operation").unwrap();
+        let params = &math_def.parameters;
         let props = params.get("properties").expect("should have properties");
+        assert!(props.get("operation").is_some());
         assert!(props.get("a").is_some());
         assert!(props.get("b").is_some());
         let required = params.get("required").expect("should have required");
         let required_arr: Vec<String> = serde_json::from_value(required.clone()).unwrap();
+        assert!(required_arr.contains(&"operation".to_string()));
         assert!(required_arr.contains(&"a".to_string()));
         assert!(required_arr.contains(&"b".to_string()));
     }
