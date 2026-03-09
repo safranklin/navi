@@ -12,7 +12,10 @@ use crate::inference::ContextItem;
 use crate::tui::component::EventHandler;
 use crate::tui::components::model_picker::ModelPickerEvent;
 use crate::tui::components::session_manager::SessionEvent;
-use crate::tui::components::{InputEvent, MessageListState, ModelPickerState, SessionManagerState};
+use crate::tui::components::tool_approval::ToolApprovalEvent;
+use crate::tui::components::{
+    InputEvent, MessageListState, ModelPickerState, SessionManagerState, ToolApprovalState,
+};
 use crate::tui::event::TuiEvent;
 use crate::tui::{InputMode, TuiState, tasks, ui};
 
@@ -45,6 +48,10 @@ pub fn handle_event(
         }
         tui.model_picker = Some(picker);
         return false;
+    }
+
+    if tui.tool_approval.is_some() {
+        return handle_tool_approval_event(&event, app, tui, tx);
     }
 
     if tui.model_picker.is_some() {
@@ -112,6 +119,12 @@ pub fn process_background_actions(
             }
             Effect::ExecuteTool(tool_call) => {
                 tasks::spawn_tool_execution(tool_call, app.registry.clone(), tx.clone());
+            }
+            Effect::PromptToolApproval => {
+                // Show approval modal for the first queued tool
+                if let Some(tc) = app.session.approval_queue.front() {
+                    tui.tool_approval = Some(ToolApprovalState::new(tc.clone()));
+                }
             }
             Effect::SaveSession => {
                 session::save_current_session(app);
@@ -291,6 +304,42 @@ fn handle_mouse_click(row: u16, app: &App, tui: &mut TuiState, frame_area: Rect)
             tui.message_list.expanded_indices.insert(idx);
         }
     }
+}
+
+fn handle_tool_approval_event(
+    event: &TuiEvent,
+    app: &mut App,
+    tui: &mut TuiState,
+    tx: &mpsc::Sender<Action>,
+) -> bool {
+    let ta = tui.tool_approval.as_mut().unwrap();
+    if let Some(approval_event) = ta.handle_event(event) {
+        let effect = match approval_event {
+            ToolApprovalEvent::Approved(call_id) => update(app, Action::ToolApproved(call_id)),
+            ToolApprovalEvent::Denied(call_id) => update(app, Action::ToolDenied(call_id)),
+        };
+
+        match effect {
+            Effect::ExecuteTool(tool_call) => {
+                tasks::spawn_tool_execution(tool_call, app.registry.clone(), tx.clone());
+            }
+            Effect::SpawnRequest => {
+                tui.active_abort_handles = tasks::spawn_request(app, tx.clone());
+            }
+            Effect::SaveSession => {
+                session::save_current_session(app);
+            }
+            _ => {}
+        }
+
+        // Show next queued tool or close modal
+        if let Some(next) = app.session.approval_queue.front() {
+            tui.tool_approval = Some(ToolApprovalState::new(next.clone()));
+        } else {
+            tui.tool_approval = None;
+        }
+    }
+    false
 }
 
 fn handle_session_event(event: &TuiEvent, app: &mut App, tui: &mut TuiState) -> bool {

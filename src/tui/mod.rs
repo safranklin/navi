@@ -43,7 +43,9 @@ use crate::core::config::{ModelEntry, ResolvedConfig};
 use crate::core::session;
 use crate::core::state::App;
 use crate::inference::Effort;
-use crate::tui::components::{InputBox, MessageListState, ModelPickerState, SessionManagerState};
+use crate::tui::components::{
+    InputBox, MessageListState, ModelPickerState, SessionManagerState, ToolApprovalState,
+};
 use crate::tui::event::{poll_event_immediate, poll_event_timeout};
 
 /// Modal input mode: determines how keyboard events are interpreted.
@@ -68,6 +70,8 @@ pub struct TuiState {
     pub session_manager: Option<SessionManagerState>,
     // Model picker overlay (None = hidden)
     pub model_picker: Option<ModelPickerState>,
+    // Tool approval overlay (None = hidden)
+    pub tool_approval: Option<ToolApprovalState>,
     // Pre-fetched models from provider APIs (populated at startup)
     pub fetched_models: Option<Vec<ModelEntry>>,
     // Abort handles for the current generation (used by Escape-to-cancel)
@@ -83,6 +87,7 @@ impl TuiState {
             pulse_value: 0.0,
             session_manager: None,
             model_picker: None,
+            tool_approval: None,
             fetched_models: None,
             active_abort_handles: Vec::new(),
         }
