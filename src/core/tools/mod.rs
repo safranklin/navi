@@ -7,14 +7,16 @@
 //! `DynTool` is the object-safe bridge trait that enables dynamic dispatch despite
 //! `Tool` having associated types. A blanket impl converts any `T: Tool` into `dyn DynTool`.
 
-pub mod math;
 pub mod io;
+pub mod math;
+pub mod permission;
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::inference::types::{ToolCall, ToolDefinition};
+pub use permission::ToolPermission;
 
 // ── Error type ──────────────────────────────────────────────────────────────
 
@@ -35,6 +37,7 @@ impl std::error::Error for ToolError {}
 pub trait Tool: Send + Sync {
     const NAME: &'static str;
     const DESCRIPTION: &'static str;
+    const PERMISSION: ToolPermission = ToolPermission::Safe;
 
     type Args: for<'de> Deserialize<'de> + JsonSchema + Send;
     type Output: Serialize;
@@ -47,6 +50,7 @@ pub trait Tool: Send + Sync {
 #[async_trait]
 trait DynTool: Send + Sync {
     fn name(&self) -> &'static str;
+    fn permission(&self) -> ToolPermission;
     fn definition(&self) -> ToolDefinition;
     async fn execute(&self, args_json: &str) -> String;
 }
@@ -55,6 +59,10 @@ trait DynTool: Send + Sync {
 impl<T: Tool> DynTool for T {
     fn name(&self) -> &'static str {
         T::NAME
+    }
+
+    fn permission(&self) -> ToolPermission {
+        T::PERMISSION
     }
 
     fn definition(&self) -> ToolDefinition {
@@ -104,6 +112,14 @@ impl ToolRegistry {
 
     pub fn definitions(&self) -> Vec<ToolDefinition> {
         self.tools.iter().map(|t| t.definition()).collect()
+    }
+
+    /// Returns the permission level for a tool by name, or None if unknown.
+    pub fn permission(&self, name: &str) -> Option<ToolPermission> {
+        self.tools
+            .iter()
+            .find(|t| t.name() == name)
+            .map(|t| t.permission())
     }
 
     pub async fn execute(&self, tool_call: &ToolCall) -> String {
@@ -177,6 +193,17 @@ mod tests {
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
         assert!(names.contains(&"math_operation"));
         assert!(names.contains(&"read_file"));
+    }
+
+    #[test]
+    fn test_permission_lookup() {
+        let registry = default_registry();
+        assert_eq!(
+            registry.permission("math_operation"),
+            Some(ToolPermission::Safe)
+        );
+        assert_eq!(registry.permission("read_file"), Some(ToolPermission::Safe));
+        assert_eq!(registry.permission("nonexistent"), None);
     }
 
     #[test]
