@@ -7,6 +7,7 @@
 //! `DynTool` is the object-safe bridge trait that enables dynamic dispatch despite
 //! `Tool` having associated types. A blanket impl converts any `T: Tool` into `dyn DynTool`.
 
+pub mod bash;
 pub mod io;
 pub mod math;
 pub mod permission;
@@ -134,9 +135,29 @@ impl ToolRegistry {
 
 /// Creates a registry with all built-in tools.
 pub fn default_registry() -> ToolRegistry {
+    use crate::core::sandbox::{DockerSandbox, LocalSandbox};
+    use std::sync::Arc;
+
     let mut registry = ToolRegistry::new();
     registry.register(math::MathOperation);
     registry.register(io::ReadFileTool);
+
+    // BashTool with Docker or local fallback
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let max_output = 100_000;
+
+    let sandbox: Arc<dyn crate::core::sandbox::Sandbox> = if DockerSandbox::is_available() {
+        Arc::new(DockerSandbox::new(cwd, "ubuntu:24.04", max_output))
+    } else {
+        log::warn!("Docker not found, using local sandbox (no isolation)");
+        Arc::new(LocalSandbox::new(cwd, max_output))
+    };
+
+    registry.register(bash::BashTool::new(
+        sandbox,
+        std::time::Duration::from_secs(120),
+    ));
+
     registry
 }
 
@@ -189,10 +210,11 @@ mod tests {
     fn test_definitions_lists_all_tools() {
         let registry = default_registry();
         let defs = registry.definitions();
-        assert_eq!(defs.len(), 2);
+        assert_eq!(defs.len(), 3);
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
         assert!(names.contains(&"math_operation"));
         assert!(names.contains(&"read_file"));
+        assert!(names.contains(&"bash"));
     }
 
     #[test]
@@ -203,6 +225,7 @@ mod tests {
             Some(ToolPermission::Safe)
         );
         assert_eq!(registry.permission("read_file"), Some(ToolPermission::Safe));
+        assert_eq!(registry.permission("bash"), Some(ToolPermission::Prompt));
         assert_eq!(registry.permission("nonexistent"), None);
     }
 
