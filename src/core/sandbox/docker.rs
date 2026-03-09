@@ -6,6 +6,18 @@
 //!
 //! Shells out to the `docker` CLI rather than using bollard - simpler, no
 //! extra dependencies, works everywhere Docker is installed.
+//!
+//! ## Performance
+//!
+//! Each command spawns a new `docker exec` process (~180ms overhead per call).
+//! First call is ~600ms due to lazy container creation. This is fine for
+//! agentic tool use where LLM round-trips dominate latency.
+//!
+//! If per-command overhead becomes a bottleneck, the fix is to keep a
+//! persistent shell session inside the container: attach to stdin/stdout
+//! once via `docker exec -i`, send commands over the pipe, and frame
+//! output with sentinel markers. That drops overhead to single-digit ms
+//! but adds complexity around output delimiting and error handling.
 
 use std::path::PathBuf;
 use std::time::Duration;
