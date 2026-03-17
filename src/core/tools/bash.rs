@@ -29,6 +29,11 @@ impl BashTool {
 pub struct BashArgs {
     /// The shell command to execute.
     pub command: String,
+    /// If true, kill and respawn the shell session before running the command.
+    /// Use when the shell is in a bad state (e.g., stuck in a subshell, broken
+    /// environment). The command runs in the fresh session.
+    #[serde(default)]
+    pub restart: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -56,13 +61,22 @@ impl Tool for BashTool {
         `wc -l file` to check size before reading, \
         `find . -name '*.rs' | head -20` to explore structure, \
         `cat file | head -100` as a safe preview. \
-        Chain commands with pipes and use `&&` for sequential operations.";
+        Chain commands with pipes and use `&&` for sequential operations. \
+        The shell session is persistent: cd, env vars, and shell state carry over between calls. \
+        Set restart=true to get a fresh shell if the session is stuck.";
     const PERMISSION: ToolPermission = ToolPermission::Prompt;
 
     type Args = BashArgs;
     type Output = BashOutput;
 
     async fn call(&self, args: BashArgs) -> Result<BashOutput, ToolError> {
+        if args.restart {
+            self.sandbox
+                .restart()
+                .await
+                .map_err(|e| ToolError(e.to_string()))?;
+        }
+
         match self.sandbox.execute(&args.command, self.timeout).await {
             Ok(out) => Ok(BashOutput {
                 stdout: out.stdout,
@@ -91,6 +105,7 @@ mod tests {
         let result = tool
             .call(BashArgs {
                 command: "echo hello world".to_string(),
+                restart: false,
             })
             .await
             .unwrap();
@@ -105,6 +120,7 @@ mod tests {
         let result = tool
             .call(BashArgs {
                 command: "exit 42".to_string(),
+                restart: false,
             })
             .await
             .unwrap();
@@ -117,6 +133,7 @@ mod tests {
         let result = tool
             .call(BashArgs {
                 command: "echo error_msg >&2".to_string(),
+                restart: false,
             })
             .await
             .unwrap();
@@ -131,6 +148,7 @@ mod tests {
         let result = tool
             .call(BashArgs {
                 command: "sleep 60".to_string(),
+                restart: false,
             })
             .await;
         let err = result.unwrap_err();
@@ -145,6 +163,7 @@ mod tests {
         let result = tool
             .call(BashArgs {
                 command: "pwd".to_string(),
+                restart: false,
             })
             .await
             .unwrap();
@@ -154,11 +173,35 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_schema_has_command_field() {
+    async fn test_schema_has_command_and_restart_fields() {
         let schema = schemars::schema_for!(BashArgs);
         let value = serde_json::to_value(schema).unwrap();
         let props = value.get("properties").expect("should have properties");
         assert!(props.get("command").is_some());
+        assert!(props.get("restart").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_restart_clears_state() {
+        let tool = test_bash_tool();
+
+        // Set state
+        tool.call(BashArgs {
+            command: "export RESTART_TEST=before".to_string(),
+            restart: false,
+        })
+        .await
+        .unwrap();
+
+        // Restart and check state is gone
+        let result = tool
+            .call(BashArgs {
+                command: "echo $RESTART_TEST".to_string(),
+                restart: true,
+            })
+            .await
+            .unwrap();
+        assert_eq!(result.stdout.trim(), "");
     }
 
     #[tokio::test]
@@ -168,6 +211,7 @@ mod tests {
         let result = tool
             .call(BashArgs {
                 command: "printf '%0.sx' $(seq 1 200)".to_string(),
+                restart: false,
             })
             .await
             .unwrap();
