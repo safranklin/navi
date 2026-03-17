@@ -32,7 +32,6 @@ pub fn test_app_with_prompt_tool() -> crate::core::state::App {
     let mut app = test_app();
     let mut registry = crate::core::tools::ToolRegistry::new();
     registry.register(crate::core::tools::math::MathOperation);
-    registry.register(crate::core::tools::io::ReadFileTool);
     registry.register(StubPromptTool);
     app.registry = Arc::new(registry);
     app

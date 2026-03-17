@@ -98,6 +98,7 @@ pub struct App {
     pub max_output_tokens: u32,
     pub system_prompt: String,
     pub available_models: Vec<ModelEntry>,
+    pub sandbox_active: bool,
 }
 
 impl App {
@@ -105,32 +106,36 @@ impl App {
     #[cfg(test)]
     pub fn new(provider: Arc<dyn CompletionProvider>, model_name: String) -> Self {
         let resolved = config::resolve(&config::NaviConfig::default(), None);
+        let (registry, sandbox_active) = crate::core::tools::default_registry();
         Self {
             provider,
             session: SessionState::new(config::DEFAULT_SYSTEM_PROMPT),
             model: ActiveModel::new(model_name, ""),
             effort: Effort::default(),
-            registry: Arc::new(crate::core::tools::default_registry()),
+            registry: Arc::new(registry),
             config: resolved,
             max_agentic_rounds: DEFAULT_MAX_AGENTIC_ROUNDS,
             max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
             system_prompt: config::DEFAULT_SYSTEM_PROMPT.to_string(),
             available_models: Vec::new(),
+            sandbox_active,
         }
     }
 
     /// Creates an App from resolved config values.
     pub fn from_config(provider: Arc<dyn CompletionProvider>, config: ResolvedConfig) -> Self {
+        let (registry, sandbox_active) = crate::core::tools::default_registry();
         Self {
             provider,
             session: SessionState::new(&config.system_prompt),
             model: ActiveModel::new(config.model_name.clone(), config.provider.clone()),
             effort: config.effort,
-            registry: Arc::new(crate::core::tools::default_registry()),
+            registry: Arc::new(registry),
             max_agentic_rounds: config.max_agentic_rounds,
             max_output_tokens: config.max_output_tokens,
             system_prompt: config.system_prompt.clone(),
             available_models: config.models.clone(),
+            sandbox_active,
             config,
         }
     }

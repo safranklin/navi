@@ -25,7 +25,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use tokio::sync::OnceCell;
 
-use super::{ExecError, ExecOutput, Sandbox};
+use super::{truncate_output, ExecError, ExecOutput, Sandbox};
 
 pub struct DockerSandbox {
     container_id: OnceCell<String>,
@@ -151,16 +151,6 @@ impl Drop for DockerSandbox {
     }
 }
 
-/// Truncate raw bytes to max_bytes, returning the UTF-8 string and whether truncation occurred.
-fn truncate_output(raw: &[u8], max_bytes: usize) -> (String, bool) {
-    if raw.len() <= max_bytes {
-        (String::from_utf8_lossy(raw).to_string(), false)
-    } else {
-        let mut s = String::from_utf8_lossy(&raw[..max_bytes]).to_string();
-        s.push_str("\n[output truncated]");
-        (s, true)
-    }
-}
 
 #[cfg(test)]
 mod tests {

@@ -134,19 +134,20 @@ impl ToolRegistry {
 }
 
 /// Creates a registry with all built-in tools.
-pub fn default_registry() -> ToolRegistry {
+/// Returns `(registry, sandbox_active)` where sandbox_active indicates Docker isolation.
+pub fn default_registry() -> (ToolRegistry, bool) {
     use crate::core::sandbox::{DockerSandbox, LocalSandbox};
     use std::sync::Arc;
 
     let mut registry = ToolRegistry::new();
     registry.register(math::MathOperation);
-    registry.register(io::ReadFileTool);
 
     // BashTool with Docker or local fallback
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let max_output = 100_000;
 
-    let sandbox: Arc<dyn crate::core::sandbox::Sandbox> = if DockerSandbox::is_available() {
+    let sandbox_active = DockerSandbox::is_available();
+    let sandbox: Arc<dyn crate::core::sandbox::Sandbox> = if sandbox_active {
         Arc::new(DockerSandbox::new(cwd, "ubuntu:24.04", max_output))
     } else {
         log::warn!("Docker not found, using local sandbox (no isolation)");
@@ -158,7 +159,7 @@ pub fn default_registry() -> ToolRegistry {
         std::time::Duration::from_secs(120),
     ));
 
-    registry
+    (registry, sandbox_active)
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────
@@ -169,7 +170,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_registry_execute() {
-        let registry = default_registry();
+        let (registry, _) = default_registry();
         let tc = ToolCall {
             id: "fc_1".into(),
             call_id: "call_1".into(),
@@ -182,7 +183,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_registry_bad_args() {
-        let registry = default_registry();
+        let (registry, _) = default_registry();
         let tc = ToolCall {
             id: "fc_2".into(),
             call_id: "call_2".into(),
@@ -195,7 +196,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_registry_unknown_tool() {
-        let registry = default_registry();
+        let (registry, _) = default_registry();
         let tc = ToolCall {
             id: "fc_3".into(),
             call_id: "call_3".into(),
@@ -208,30 +209,28 @@ mod tests {
 
     #[test]
     fn test_definitions_lists_all_tools() {
-        let registry = default_registry();
+        let (registry, _) = default_registry();
         let defs = registry.definitions();
-        assert_eq!(defs.len(), 3);
+        assert_eq!(defs.len(), 2);
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
         assert!(names.contains(&"math_operation"));
-        assert!(names.contains(&"read_file"));
         assert!(names.contains(&"bash"));
     }
 
     #[test]
     fn test_permission_lookup() {
-        let registry = default_registry();
+        let (registry, _) = default_registry();
         assert_eq!(
             registry.permission("math_operation"),
             Some(ToolPermission::Safe)
         );
-        assert_eq!(registry.permission("read_file"), Some(ToolPermission::Safe));
         assert_eq!(registry.permission("bash"), Some(ToolPermission::Prompt));
         assert_eq!(registry.permission("nonexistent"), None);
     }
 
     #[test]
     fn test_math_schema_has_properties_and_required() {
-        let registry = default_registry();
+        let (registry, _) = default_registry();
         let defs = registry.definitions();
         let math_def = defs.iter().find(|d| d.name == "math_operation").unwrap();
         let params = &math_def.parameters;

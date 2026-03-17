@@ -569,7 +569,7 @@ mod tests {
         assert!(app.session.is_loading);
 
         // Stream sends second tool call
-        let tc2 = make_tool_call("read_file", "call_2");
+        let tc2 = make_tool_call("math_operation", "call_2");
         let effect = update(&mut app, Action::ToolCallReceived(tc2));
         assert!(matches!(effect, Effect::ExecuteTool(_)));
 

@@ -20,6 +20,7 @@ pub struct TitleBar<'a> {
     spinner_frame: usize,
     session_title: &'a str,
     session_total_tokens: u32,
+    sandbox_active: bool,
 }
 
 impl<'a> TitleBar<'a> {
@@ -30,6 +31,7 @@ impl<'a> TitleBar<'a> {
         spinner_frame: usize,
         session_title: &'a str,
         session_total_tokens: u32,
+        sandbox_active: bool,
     ) -> Self {
         Self {
             model_name,
@@ -38,6 +40,7 @@ impl<'a> TitleBar<'a> {
             spinner_frame,
             session_title,
             session_total_tokens,
+            sandbox_active,
         }
     }
 }
@@ -86,6 +89,14 @@ impl Component for TitleBar<'_> {
             left.push(Span::styled(
                 format!(" ({})", self.provider_name),
                 Style::default().fg(Color::DarkGray),
+            ));
+        }
+
+        // Sandbox indicator - only warn when missing
+        if !self.sandbox_active {
+            left.push(Span::styled(
+                " [not sandboxed]",
+                Style::default().fg(Color::Yellow),
             ));
         }
 
@@ -148,7 +159,7 @@ mod tests {
         title: &'a str,
         tokens: u32,
     ) -> TitleBar<'a> {
-        TitleBar::new(model, provider, loading, 0, title, tokens)
+        TitleBar::new(model, provider, loading, 0, title, tokens, false)
     }
 
     #[test]
@@ -234,5 +245,19 @@ mod tests {
     fn test_format_tokens_millions() {
         assert_eq!(format_tokens(1_000_000), "1.0M");
         assert_eq!(format_tokens(2_500_000), "2.5M");
+    }
+
+    #[test]
+    fn test_sandbox_active_hidden() {
+        let mut b = TitleBar::new("gpt-4", "", false, 0, "", 0, true);
+        let text = render(80, &mut b);
+        assert!(!text.contains("[not sandboxed]"));
+    }
+
+    #[test]
+    fn test_sandbox_inactive_warning() {
+        let mut b = TitleBar::new("gpt-4", "", false, 0, "", 0, false);
+        let text = render(80, &mut b);
+        assert!(text.contains("[not sandboxed]"));
     }
 }

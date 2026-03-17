@@ -44,9 +44,19 @@ impl Tool for BashTool {
     const NAME: &'static str = "bash";
     const DESCRIPTION: &'static str = "\
         Executes a shell command and returns stdout, stderr, exit code, and a truncated flag. \
-        Commands run in the project's working directory with a 120-second timeout. \
-        Output is capped at 100KB per stream; if exceeded, the truncated field is true. \
-        Prefer concise commands and pipe to head/tail when output may be large.";
+        Commands run sandboxed to the project's working directory with a 120-second timeout. \
+        Output is capped at 100KB per stream; if exceeded, the output is smart-truncated \
+        (first ~200 lines + last ~200 lines with a separator showing omitted count) \
+        and the truncated field is true. Errors at the end of output are always visible. \
+        This is your primary tool for all file operations and system interaction. \
+        Optimize for context window - never dump entire files when you only need part of them: \
+        `head -n 50 file` for the top, `tail -n 20 file` for the end, \
+        `sed -n '10,25p' file` for a specific range, \
+        `grep -n 'pattern' file` to find lines, `grep -C 3 'pattern' file` for context, \
+        `wc -l file` to check size before reading, \
+        `find . -name '*.rs' | head -20` to explore structure, \
+        `cat file | head -100` as a safe preview. \
+        Chain commands with pipes and use `&&` for sequential operations.";
     const PERMISSION: ToolPermission = ToolPermission::Prompt;
 
     type Args = BashArgs;
@@ -162,6 +172,6 @@ mod tests {
             .await
             .unwrap();
         assert!(result.truncated);
-        assert!(result.stdout.contains("[output truncated]"));
+        assert!(result.stdout.contains("truncated"));
     }
 }

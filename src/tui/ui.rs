@@ -58,6 +58,7 @@ pub fn draw_ui(frame: &mut Frame, app: &App, tui: &mut TuiState, spinner_frame: 
         spinner_frame,
         &app.session.session_title,
         app.session.session_total_tokens,
+        app.sandbox_active,
     );
     title_bar.render(frame, title_area);
 
