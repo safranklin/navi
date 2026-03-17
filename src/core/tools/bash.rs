@@ -112,7 +112,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_stderr_capture() {
+    async fn test_stderr_merged_into_stdout() {
         let tool = test_bash_tool();
         let result = tool
             .call(BashArgs {
@@ -120,8 +120,8 @@ mod tests {
             })
             .await
             .unwrap();
-        assert!(result.stderr.contains("error_msg"));
-        assert!(result.stdout.trim().is_empty());
+        // With persistent sessions, stderr is merged into stdout
+        assert!(result.stdout.contains("error_msg"));
     }
 
     #[tokio::test]

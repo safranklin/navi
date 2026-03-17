@@ -166,18 +166,19 @@ impl ShellSession {
                 }
 
                 // Check for end sentinel
-                if let Some(rest) = trimmed.strip_prefix(&end_prefix) {
-                    if let Some(code_str) = rest.strip_suffix("___") {
-                        let exit_code = code_str.parse::<i32>().unwrap_or(-1);
-                        // Remove trailing empty line that we added before end sentinel
-                        if output_lines.last().map(|l: &String| l.is_empty()).unwrap_or(false) {
-                            output_lines.pop();
-                        }
-                        return Ok(SessionOutput {
-                            stdout: output_lines.join("\n"),
-                            exit_code,
-                        });
+                if let Some(code_str) = trimmed
+                    .strip_prefix(&end_prefix)
+                    .and_then(|rest| rest.strip_suffix("___"))
+                {
+                    let exit_code = code_str.parse::<i32>().unwrap_or(-1);
+                    // Remove trailing empty line that we added before end sentinel
+                    if output_lines.last().map(|l: &String| l.is_empty()).unwrap_or(false) {
+                        output_lines.pop();
                     }
+                    return Ok(SessionOutput {
+                        stdout: output_lines.join("\n"),
+                        exit_code,
+                    });
                 }
 
                 output_lines.push(trimmed.to_string());
@@ -206,8 +207,6 @@ impl ShellSession {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
-
     fn safe_env() -> Vec<(String, String)> {
         ["PATH", "HOME", "TERM", "LANG", "USER", "SHELL"]
             .iter()

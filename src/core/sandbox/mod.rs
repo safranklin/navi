@@ -55,6 +55,12 @@ impl std::error::Error for ExecError {}
 pub trait Sandbox: Send + Sync {
     /// Execute a shell command and return its output.
     async fn execute(&self, command: &str, timeout: Duration) -> Result<ExecOutput, ExecError>;
+
+    /// Kill and respawn the persistent shell session.
+    /// Next execute() call will start with a fresh shell.
+    async fn restart(&self) -> Result<(), ExecError> {
+        Ok(()) // no-op default for backends that don't support sessions
+    }
 }
 
 /// Smart truncation: keeps head + tail of output so errors at the end aren't lost.
