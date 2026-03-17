@@ -1,30 +1,20 @@
 //! # Docker Sandbox
 //!
-//! Executes commands inside a persistent Docker container. The container is
-//! created lazily on first use and stopped on drop. CWD is volume-mounted
-//! as /workspace.
+//! Executes commands inside a persistent Docker container with a persistent
+//! shell session. The container is created lazily on first use and stopped
+//! on drop. CWD is volume-mounted as /workspace.
 //!
-//! Shells out to the `docker` CLI rather than using bollard - simpler, no
-//! extra dependencies, works everywhere Docker is installed.
-//!
-//! ## Performance
-//!
-//! Each command spawns a new `docker exec` process (~180ms overhead per call).
-//! First call is ~600ms due to lazy container creation. This is fine for
-//! agentic tool use where LLM round-trips dominate latency.
-//!
-//! If per-command overhead becomes a bottleneck, the fix is to keep a
-//! persistent shell session inside the container: attach to stdin/stdout
-//! once via `docker exec -i`, send commands over the pipe, and frame
-//! output with sentinel markers. That drops overhead to single-digit ms
-//! but adds complexity around output delimiting and error handling.
+//! Uses a ShellSession attached via `docker exec -i` for single-digit ms
+//! per-command overhead (vs ~180ms for exec-per-command). Falls back to
+//! exec-per-command if the session fails.
 
 use std::path::PathBuf;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use tokio::sync::OnceCell;
+use tokio::sync::{Mutex, OnceCell};
 
+use super::session::ShellSession;
 use super::{truncate_output, ExecError, ExecOutput, Sandbox};
 
 pub struct DockerSandbox {
@@ -32,6 +22,7 @@ pub struct DockerSandbox {
     image: String,
     working_dir: PathBuf,
     max_output_bytes: usize,
+    session: Mutex<Option<ShellSession>>,
 }
 
 impl DockerSandbox {
@@ -41,6 +32,7 @@ impl DockerSandbox {
             image: image.to_string(),
             working_dir,
             max_output_bytes,
+            session: Mutex::new(None),
         }
     }
 
@@ -98,13 +90,39 @@ impl DockerSandbox {
             .await
             .map(|s| s.as_str())
     }
-}
 
-#[async_trait]
-impl Sandbox for DockerSandbox {
-    async fn execute(&self, command: &str, timeout: Duration) -> Result<ExecOutput, ExecError> {
-        let container_id = self.get_or_create_container().await?;
+    /// Attach a persistent shell session to the container via `docker exec -i`.
+    async fn attach_session(container_id: &str) -> Result<ShellSession, ExecError> {
+        let mut cmd = tokio::process::Command::new("docker");
+        cmd.args(["exec", "-i", container_id, "bash"]);
+        ShellSession::spawn_from_command(&mut cmd).await
+    }
 
+    /// Ensure the session is alive, attaching a new one if needed.
+    async fn ensure_session(
+        session_slot: &mut Option<ShellSession>,
+        container_id: &str,
+    ) -> Result<(), ExecError> {
+        let needs_attach = match session_slot.as_mut() {
+            Some(s) => !s.is_alive(),
+            None => true,
+        };
+
+        if needs_attach {
+            let new_session = Self::attach_session(container_id).await?;
+            *session_slot = Some(new_session);
+        }
+
+        Ok(())
+    }
+
+    /// One-shot execution via `docker exec`. Fallback when session fails.
+    async fn execute_oneshot(
+        &self,
+        container_id: &str,
+        command: &str,
+        timeout: Duration,
+    ) -> Result<ExecOutput, ExecError> {
         let exec_future = async {
             let output = tokio::process::Command::new("docker")
                 .args(["exec", container_id, "bash", "-c", command])
@@ -128,7 +146,6 @@ impl Sandbox for DockerSandbox {
         match tokio::time::timeout(timeout, exec_future).await {
             Ok(result) => result,
             Err(_) => {
-                // Kill the container on timeout
                 let _ = tokio::process::Command::new("docker")
                     .args(["stop", "-t", "0", container_id])
                     .output()
@@ -136,6 +153,62 @@ impl Sandbox for DockerSandbox {
                 Err(ExecError::Timeout(timeout))
             }
         }
+    }
+}
+
+#[async_trait]
+impl Sandbox for DockerSandbox {
+    async fn execute(&self, command: &str, timeout: Duration) -> Result<ExecOutput, ExecError> {
+        let container_id = self.get_or_create_container().await?;
+        let mut session_guard = self.session.lock().await;
+
+        // Try persistent session first
+        match Self::ensure_session(&mut session_guard, container_id).await {
+            Ok(()) => {
+                let session = session_guard.as_mut().unwrap();
+                match session.execute(command, timeout).await {
+                    Ok(output) => {
+                        let raw = output.stdout.as_bytes();
+                        let (stdout, truncated) = truncate_output(raw, self.max_output_bytes);
+                        return Ok(ExecOutput {
+                            stdout,
+                            stderr: String::new(),
+                            exit_code: output.exit_code,
+                            truncated,
+                        });
+                    }
+                    Err(ExecError::Timeout(d)) => {
+                        if let Some(s) = session_guard.as_mut() {
+                            s.kill().await;
+                        }
+                        *session_guard = None;
+                        return Err(ExecError::Timeout(d));
+                    }
+                    Err(_) => {
+                        if let Some(s) = session_guard.as_mut() {
+                            s.kill().await;
+                        }
+                        *session_guard = None;
+                    }
+                }
+            }
+            Err(_) => {
+                *session_guard = None;
+            }
+        }
+
+        // Fallback: exec-per-command
+        drop(session_guard);
+        self.execute_oneshot(container_id, command, timeout).await
+    }
+
+    async fn restart(&self) -> Result<(), ExecError> {
+        let mut session_guard = self.session.lock().await;
+        if let Some(s) = session_guard.as_mut() {
+            s.kill().await;
+        }
+        *session_guard = None;
+        Ok(())
     }
 }
 
@@ -150,7 +223,6 @@ impl Drop for DockerSandbox {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -198,7 +270,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_docker_persistent_container() {
+    async fn test_docker_state_persists() {
         if !DockerSandbox::is_available() {
             eprintln!("Skipping: Docker not available");
             return;
@@ -206,18 +278,27 @@ mod tests {
 
         let sb = DockerSandbox::new(std::env::temp_dir(), "ubuntu:24.04", 100_000);
 
-        // First command creates the container
-        sb.execute("echo first", Duration::from_secs(30))
-            .await
-            .unwrap();
-
-        // State should persist across commands (same container)
+        // With persistent session, env vars now persist across calls
         sb.execute("export NAVI_STATE=hello", Duration::from_secs(30))
             .await
             .unwrap();
 
-        // Note: env vars don't persist across docker exec calls (each is a new shell),
-        // but files do
+        let out = sb
+            .execute("echo $NAVI_STATE", Duration::from_secs(30))
+            .await
+            .unwrap();
+        assert_eq!(out.stdout.trim(), "hello");
+    }
+
+    #[tokio::test]
+    async fn test_docker_file_persistence() {
+        if !DockerSandbox::is_available() {
+            eprintln!("Skipping: Docker not available");
+            return;
+        }
+
+        let sb = DockerSandbox::new(std::env::temp_dir(), "ubuntu:24.04", 100_000);
+
         sb.execute("touch /tmp/navi_test_marker", Duration::from_secs(30))
             .await
             .unwrap();

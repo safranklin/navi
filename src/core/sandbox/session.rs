@@ -44,11 +44,10 @@ pub struct SessionOutput {
 }
 
 impl ShellSession {
-    /// Spawn a new shell session.
+    /// Spawn a new shell session with a local shell process.
     ///
     /// The shell process runs with the given working directory and environment.
-    /// stderr is merged into stdout via the command framing protocol, so the
-    /// session only reads a single output stream.
+    /// stderr is merged into stdout via `exec 2>&1` at startup.
     pub async fn spawn(
         shell: &str,
         working_dir: &Path,
@@ -58,16 +57,31 @@ impl ShellSession {
         cmd.current_dir(working_dir)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped()) // not read, but must not block
+            .stderr(std::process::Stdio::piped())
             .env_clear();
 
         for (key, val) in &env {
             cmd.env(key, val);
         }
 
+        Self::spawn_from_command(&mut cmd).await
+    }
+
+    /// Spawn a session from a pre-configured command.
+    ///
+    /// The command must have stdin/stdout piped. Used by DockerSandbox to
+    /// wrap `docker exec -i {container} bash`.
+    pub async fn spawn_from_command(
+        cmd: &mut tokio::process::Command,
+    ) -> Result<Self, ExecError> {
+        // Ensure stdio is piped
+        cmd.stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+
         let mut child = cmd
             .spawn()
-            .map_err(|e| ExecError::SpawnFailed(format!("Failed to spawn '{shell}': {e}")))?;
+            .map_err(|e| ExecError::SpawnFailed(format!("Failed to spawn session: {e}")))?;
 
         let stdin = child
             .stdin
@@ -85,8 +99,6 @@ impl ShellSession {
         };
 
         // Redirect stderr to stdout globally for this shell session.
-        // This way we only need to read one stream and stderr from any
-        // command appears in the output.
         session
             .stdin
             .write_all(b"exec 2>&1\n")
