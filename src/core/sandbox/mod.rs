@@ -84,7 +84,9 @@ pub(crate) fn truncate_output(raw: &[u8], max_bytes: usize) -> (String, bool) {
         let head = String::from_utf8_lossy(&raw[..half]);
         let tail = String::from_utf8_lossy(&raw[raw.len() - half..]);
         return (
-            format!("{head}\n\n... [output truncated: middle bytes omitted, showing first and last {half} bytes] ...\n\n{tail}"),
+            format!(
+                "{head}\n\n... [output truncated: middle bytes omitted, showing first and last {half} bytes] ...\n\n{tail}"
+            ),
             true,
         );
     }
@@ -173,7 +175,9 @@ mod tests {
         // The proportional budget means small line counts won't truncate by lines.
         // This is by design - the byte fallback handles the case.
         // Test that a moderate count (e.g., 30 lines) with low byte cap works:
-        let lines: Vec<String> = (0..30).map(|i| format!("line {i} with padding content here")).collect();
+        let lines: Vec<String> = (0..30)
+            .map(|i| format!("line {i} with padding content here"))
+            .collect();
         let input = lines.join("\n");
         let raw = input.as_bytes();
 

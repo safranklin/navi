@@ -15,7 +15,7 @@ use async_trait::async_trait;
 use tokio::sync::{Mutex, OnceCell};
 
 use super::session::ShellSession;
-use super::{truncate_output, ExecError, ExecOutput, Sandbox};
+use super::{ExecError, ExecOutput, Sandbox, truncate_output};
 
 pub struct DockerSandbox {
     container_id: OnceCell<String>,

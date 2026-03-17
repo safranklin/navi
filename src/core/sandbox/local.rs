@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use tokio::sync::Mutex;
 
 use super::session::ShellSession;
-use super::{truncate_output, ExecError, ExecOutput, Sandbox};
+use super::{ExecError, ExecOutput, Sandbox, truncate_output};
 
 /// Safe environment variables to pass through to child processes.
 const SAFE_ENV_VARS: &[&str] = &["PATH", "HOME", "TERM", "LANG", "USER", "SHELL"];
@@ -221,19 +221,14 @@ mod tests {
     #[tokio::test]
     async fn test_timeout() {
         let sb = test_sandbox();
-        let result = sb
-            .execute("sleep 60", Duration::from_millis(100))
-            .await;
+        let result = sb.execute("sleep 60", Duration::from_millis(100)).await;
         assert!(matches!(result, Err(ExecError::Timeout(_))));
     }
 
     #[tokio::test]
     async fn test_exit_code() {
         let sb = test_sandbox();
-        let out = sb
-            .execute("false", Duration::from_secs(5))
-            .await
-            .unwrap();
+        let out = sb.execute("false", Duration::from_secs(5)).await.unwrap();
         assert_eq!(out.exit_code, 1);
     }
 
@@ -252,14 +247,9 @@ mod tests {
     async fn test_state_persists_across_calls() {
         let sb = test_sandbox();
 
-        sb.execute("cd /tmp", Duration::from_secs(5))
-            .await
-            .unwrap();
+        sb.execute("cd /tmp", Duration::from_secs(5)).await.unwrap();
 
-        let out = sb
-            .execute("pwd", Duration::from_secs(5))
-            .await
-            .unwrap();
+        let out = sb.execute("pwd", Duration::from_secs(5)).await.unwrap();
 
         let actual = std::fs::canonicalize(out.stdout.trim()).unwrap_or_default();
         let expected = std::fs::canonicalize("/tmp").unwrap_or_default();
@@ -308,9 +298,7 @@ mod tests {
         let sb = test_sandbox();
 
         // Timeout kills the session
-        let result = sb
-            .execute("sleep 60", Duration::from_millis(100))
-            .await;
+        let result = sb.execute("sleep 60", Duration::from_millis(100)).await;
         assert!(matches!(result, Err(ExecError::Timeout(_))));
 
         // Next command should work (new session spawned)

@@ -85,7 +85,11 @@ mod tests {
     /// Helper to call with typed args directly.
     async fn run(op: MathOperationType, a: f64, b: f64) -> f64 {
         MathOperation
-            .call(MathOperationArgs { operation: op, a, b })
+            .call(MathOperationArgs {
+                operation: op,
+                a,
+                b,
+            })
             .await
             .unwrap()
             .result
@@ -94,7 +98,11 @@ mod tests {
     /// Helper for error cases.
     async fn run_err(op: MathOperationType, a: f64, b: f64) -> ToolError {
         MathOperation
-            .call(MathOperationArgs { operation: op, a, b })
+            .call(MathOperationArgs {
+                operation: op,
+                a,
+                b,
+            })
             .await
             .unwrap_err()
     }

@@ -457,13 +457,7 @@ mod tests {
         let mut tui = test_tui_state();
         let (tx, _rx) = mpsc::channel();
 
-        let quit = handle_event(
-            TuiEvent::Resize,
-            &mut app,
-            &mut tui,
-            &tx,
-            test_frame_area(),
-        );
+        let quit = handle_event(TuiEvent::Resize, &mut app, &mut tui, &tx, test_frame_area());
 
         assert!(!quit);
     }
@@ -515,13 +509,7 @@ mod tests {
         tui.model_picker = Some(ModelPickerState::new(vec![]));
         let (tx, _rx) = mpsc::channel();
 
-        let quit = handle_event(
-            TuiEvent::Escape,
-            &mut app,
-            &mut tui,
-            &tx,
-            test_frame_area(),
-        );
+        let quit = handle_event(TuiEvent::Escape, &mut app, &mut tui, &tx, test_frame_area());
 
         assert!(!quit);
         assert!(tui.model_picker.is_none());
@@ -561,13 +549,7 @@ mod tests {
             }));
         let (tx, _rx) = mpsc::channel();
 
-        handle_event(
-            TuiEvent::Escape,
-            &mut app,
-            &mut tui,
-            &tx,
-            test_frame_area(),
-        );
+        handle_event(TuiEvent::Escape, &mut app, &mut tui, &tx, test_frame_area());
 
         assert_eq!(tui.input_mode, InputMode::Cursor);
         assert!(tui.message_list.selected_index.is_some());
@@ -604,13 +586,7 @@ mod tests {
             }));
         let (tx, _rx) = mpsc::channel();
 
-        handle_event(
-            TuiEvent::Escape,
-            &mut app,
-            &mut tui,
-            &tx,
-            test_frame_area(),
-        );
+        handle_event(TuiEvent::Escape, &mut app, &mut tui, &tx, test_frame_area());
 
         assert_eq!(tui.message_list.selected_index, Some(3));
     }
@@ -643,13 +619,7 @@ mod tests {
         tui.message_list.selected_index = Some(0);
         let (tx, _rx) = mpsc::channel();
 
-        handle_event(
-            TuiEvent::Submit,
-            &mut app,
-            &mut tui,
-            &tx,
-            test_frame_area(),
-        );
+        handle_event(TuiEvent::Submit, &mut app, &mut tui, &tx, test_frame_area());
 
         assert_eq!(tui.input_mode, InputMode::Input);
         assert_eq!(tui.message_list.selected_index, None);
@@ -672,13 +642,7 @@ mod tests {
         tui.active_abort_handles.push(handle.abort_handle());
         let (tx, _rx) = mpsc::channel();
 
-        let quit = handle_event(
-            TuiEvent::Escape,
-            &mut app,
-            &mut tui,
-            &tx,
-            test_frame_area(),
-        );
+        let quit = handle_event(TuiEvent::Escape, &mut app, &mut tui, &tx, test_frame_area());
 
         assert!(!quit);
         assert!(tui.active_abort_handles.is_empty());

@@ -71,9 +71,7 @@ impl ShellSession {
     ///
     /// The command must have stdin/stdout piped. Used by DockerSandbox to
     /// wrap `docker exec -i {container} bash`.
-    pub async fn spawn_from_command(
-        cmd: &mut tokio::process::Command,
-    ) -> Result<Self, ExecError> {
+    pub async fn spawn_from_command(cmd: &mut tokio::process::Command) -> Result<Self, ExecError> {
         // Ensure stdio is piped
         cmd.stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -138,10 +136,9 @@ impl ShellSession {
         );
 
         // Write to stdin
-        self.stdin
-            .write_all(framed.as_bytes())
-            .await
-            .map_err(|e| ExecError::SpawnFailed(format!("Failed to write to session stdin: {e}")))?;
+        self.stdin.write_all(framed.as_bytes()).await.map_err(|e| {
+            ExecError::SpawnFailed(format!("Failed to write to session stdin: {e}"))
+        })?;
         self.stdin
             .flush()
             .await
@@ -155,11 +152,10 @@ impl ShellSession {
 
             loop {
                 line.clear();
-                let bytes_read = self
-                    .stdout_reader
-                    .read_line(&mut line)
-                    .await
-                    .map_err(|e| ExecError::SpawnFailed(format!("Failed to read stdout: {e}")))?;
+                let bytes_read =
+                    self.stdout_reader.read_line(&mut line).await.map_err(|e| {
+                        ExecError::SpawnFailed(format!("Failed to read stdout: {e}"))
+                    })?;
 
                 if bytes_read == 0 {
                     return Err(ExecError::SpawnFailed(
@@ -184,7 +180,11 @@ impl ShellSession {
                 {
                     let exit_code = code_str.parse::<i32>().unwrap_or(-1);
                     // Remove trailing empty line that we added before end sentinel
-                    if output_lines.last().map(|l: &String| l.is_empty()).unwrap_or(false) {
+                    if output_lines
+                        .last()
+                        .map(|l: &String| l.is_empty())
+                        .unwrap_or(false)
+                    {
                         output_lines.pop();
                     }
                     return Ok(SessionOutput {
@@ -287,9 +287,7 @@ mod tests {
     async fn test_exit_code_propagation() {
         let mut session = test_session().await;
 
-        let result = session
-            .execute("exit 42", Duration::from_secs(5))
-            .await;
+        let result = session.execute("exit 42", Duration::from_secs(5)).await;
 
         // After `exit 42`, the shell dies. The session should detect EOF.
         // This is expected - `exit` kills the shell process.

@@ -263,8 +263,8 @@ pub fn update(app_state: &mut App, action: Action) -> Effect {
             session.session_title = data.meta.title.clone();
             session.status_message = format!("Loaded: {}", data.meta.title);
             let loaded_model = ActiveModel::new(data.meta.model_name, data.meta.provider_name);
-            let provider_changed =
-                !loaded_model.provider.is_empty() && loaded_model.provider != app_state.model.provider;
+            let provider_changed = !loaded_model.provider.is_empty()
+                && loaded_model.provider != app_state.model.provider;
             if !loaded_model.provider.is_empty() {
                 app_state.model = loaded_model;
             } else {
@@ -725,7 +725,10 @@ mod tests {
         assert_eq!(effect, Effect::SwitchProvider);
     }
 
-    fn make_session_data(model_name: &str, provider_name: &str) -> crate::core::session::SessionData {
+    fn make_session_data(
+        model_name: &str,
+        provider_name: &str,
+    ) -> crate::core::session::SessionData {
         use crate::core::session::{SessionData, SessionMeta};
         SessionData {
             meta: SessionMeta {
