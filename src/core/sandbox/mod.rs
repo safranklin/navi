@@ -13,6 +13,7 @@
 
 pub mod docker;
 pub mod local;
+pub mod session;
 
 pub use docker::DockerSandbox;
 pub use local::LocalSandbox;
